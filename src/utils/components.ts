@@ -1,5 +1,5 @@
 import type { DesignDocument, EditorNode } from '../types';
-import { createId, getChildren, getDescendantIds, getNode } from './document';
+import { createId, getChildren, getDescendantIds, getNode, isEditorNodeEqual } from './document';
 
 function variantKey(node: EditorNode): string {
   return node.variantKey ?? node.component?.sourceId ?? node.id;
@@ -139,12 +139,18 @@ export function syncComponents(doc: DesignDocument): DesignDocument {
         nodes.filter((node) => oldIds.has(node.id)).map((node) => [variantKey(node), node]),
       );
       const rebuilt = buildInstanceTree({ ...doc, nodes }, mainRoot, existingNodes);
+      const previousById = new Map(nodes.map((node) => [node.id, node]));
+      const preserved = rebuilt.map((node) => {
+        const previous = previousById.get(node.id);
+        return previous && isEditorNodeEqual(previous, node) ? previous : node;
+      });
       const rootIndex = nodes.findIndex((node) => node.id === instanceRoot.id);
       nodes = nodes.filter((node) => !oldIds.has(node.id));
-      nodes.splice(Math.max(0, rootIndex), 0, ...rebuilt);
+      nodes.splice(Math.max(0, rootIndex), 0, ...preserved);
     });
   });
-  return nodes === doc.nodes ? doc : { ...doc, nodes };
+  const unchanged = nodes.length === doc.nodes.length && nodes.every((node, index) => node === doc.nodes[index]);
+  return unchanged ? doc : { ...doc, nodes };
 }
 
 export function detachInstance(doc: DesignDocument, id: string): DesignDocument {

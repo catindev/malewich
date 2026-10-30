@@ -27,9 +27,13 @@ import { usePageDocument } from '../hooks/usePageDocument';
 import { PagesPanel } from './PagesPanel';
 import { getAncestors, getNode } from '../utils/document';
 import { getActivePageId } from '../utils/pages';
+import { flattenLayerRows } from '../utils/layers';
 import { LayerContextMenu } from './LayerContextMenu';
 import { ProjectControls } from './Topbar';
 import { ZoomControls } from './ZoomControls';
+
+const LAYER_ROW_HEIGHT = 31;
+const LAYER_OVERSCAN = 6;
 
 const typeIcons: Record<NodeType, typeof Frame> = {
   frame: Frame,
@@ -57,9 +61,9 @@ function layerKind(node: EditorNode): { label: string; Icon: typeof Frame; class
 }
 
 interface LayerRowProps {
-  childrenByParent: ReadonlyMap<string | null, EditorNode[]>;
   node: EditorNode;
   depth: number;
+  hasChildren: boolean;
   collapsed: Set<string>;
   setCollapsed: (collapsed: Set<string>) => void;
   renaming: string | null;
@@ -67,13 +71,12 @@ interface LayerRowProps {
   onOpenContextMenu: (event: ReactMouseEvent<HTMLDivElement>, node: EditorNode) => void;
 }
 
-function LayerRowComponent({ childrenByParent, node, depth, collapsed, setCollapsed, renaming, setRenaming, onOpenContextMenu }: LayerRowProps) {
+function LayerRowComponent({ node, depth, hasChildren, collapsed, setCollapsed, renaming, setRenaming, onOpenContextMenu }: LayerRowProps) {
   const selection = useEditorStore((state) => state.selection);
   const setSelection = useEditorStore((state) => state.setSelection);
   const updateNode = useEditorStore((state) => state.updateNode);
   const moveLayer = useEditorStore((state) => state.moveLayer);
   const [draftName, setDraftName] = useState(node.name);
-  const children = childrenByParent.get(node.id) ?? [];
   const kind = layerKind(node);
   const Icon = kind.Icon;
   const isExpanded = !collapsed.has(node.id);
@@ -85,112 +88,97 @@ function LayerRowComponent({ childrenByParent, node, depth, collapsed, setCollap
   };
 
   return (
-    <>
-      <div
-        className={`layer-row ${kind.className}${selection.includes(node.id) ? ' is-selected' : ''}${!node.visible ? ' is-hidden' : ''}`}
-        data-layer-id={node.id}
-        data-node-kind={kind.label}
-        title={`${kind.label} · ${displayName}`}
-        style={{ paddingLeft: 8 + depth * 16 }}
-        draggable={renaming !== node.id}
-        onDragStart={(event) => {
-          event.stopPropagation();
-          event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData('text/plain', node.id);
-        }}
-        onDragOver={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          event.dataTransfer.dropEffect = 'move';
-          event.currentTarget.classList.add('is-drag-target');
-        }}
-        onDragLeave={(event) => event.currentTarget.classList.remove('is-drag-target')}
-        onDrop={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          event.currentTarget.classList.remove('is-drag-target');
-          const rect = event.currentTarget.getBoundingClientRect();
-          const offset = (event.clientY - rect.top) / rect.height;
-          const position = node.type === 'frame' && offset > 0.25 && offset < 0.75
-            ? 'inside' : offset < 0.5 ? 'after' : 'before';
-          moveLayer(event.dataTransfer.getData('text/plain'), node.id, position);
-        }}
-        onClick={(event) => {
-          if (event.metaKey || event.ctrlKey || event.shiftKey) {
-            setSelection(selection.includes(node.id) ? selection.filter((id) => id !== node.id) : [...selection, node.id]);
-          } else setSelection([node.id]);
-        }}
-        onDoubleClick={() => {
-          setDraftName(node.name);
-          setRenaming(node.id);
-        }}
-        onContextMenu={(event) => onOpenContextMenu(event, node)}
-      >
-        {children.length > 0 ? (
-          <button
-            className="layer-disclosure"
-            onClick={(event) => {
-              event.stopPropagation();
-              const next = new Set(collapsed);
-              if (isExpanded) next.add(node.id); else next.delete(node.id);
-              setCollapsed(next);
-            }}
-          >
-            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          </button>
-        ) : <span className="layer-disclosure-spacer" />}
-        <span className="layer-kind"><Icon size={14} className="layer-type-icon" strokeWidth={1.6} /></span>
-        {renaming === node.id ? (
-          <input
-            className="layer-name-input" value={draftName} autoFocus
-            onChange={(event) => setDraftName(event.target.value)}
-            onBlur={finishRename}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur();
-              if (event.key === 'Escape') {
-                setDraftName(node.name);
-                setRenaming(null);
-              }
-            }}
-            onClick={(event) => event.stopPropagation()}
-          />
-        ) : <span className="layer-name">{displayName}</span>}
-        <div className="layer-actions">
-          <button
-            title={node.locked ? 'Разблокировать' : 'Заблокировать'}
-            onClick={(event) => {
-              event.stopPropagation();
-              updateNode(node.id, { locked: !node.locked });
-            }}
-          >
-            {node.locked ? <Lock size={12} /> : <Unlock size={12} />}
-          </button>
-          <button
-            title={node.visible ? 'Скрыть' : 'Показать'}
-            onClick={(event) => {
-              event.stopPropagation();
-              updateNode(node.id, { visible: !node.visible });
-            }}
-          >
-            {node.visible ? <Eye size={12} /> : <EyeOff size={12} />}
-          </button>
-        </div>
-      </div>
-      {isExpanded && children.slice().reverse().map((child) => (
-        <LayerRow
-          key={child.id} childrenByParent={childrenByParent} node={child} depth={depth + 1}
-          collapsed={collapsed} setCollapsed={setCollapsed}
-          renaming={renaming} setRenaming={setRenaming} onOpenContextMenu={onOpenContextMenu}
+    <div
+      className={`layer-row ${kind.className}${selection.includes(node.id) ? ' is-selected' : ''}${!node.visible ? ' is-hidden' : ''}`}
+      data-layer-id={node.id}
+      data-node-kind={kind.label}
+      title={`${kind.label} · ${displayName}`}
+      style={{ paddingLeft: 8 + depth * 16 }}
+      draggable={renaming !== node.id}
+      onDragStart={(event) => {
+        event.stopPropagation();
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', node.id);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = 'move';
+        event.currentTarget.classList.add('is-drag-target');
+      }}
+      onDragLeave={(event) => event.currentTarget.classList.remove('is-drag-target')}
+      onDrop={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.classList.remove('is-drag-target');
+        const rect = event.currentTarget.getBoundingClientRect();
+        const offset = (event.clientY - rect.top) / rect.height;
+        const position = node.type === 'frame' && offset > 0.25 && offset < 0.75
+          ? 'inside' : offset < 0.5 ? 'after' : 'before';
+        moveLayer(event.dataTransfer.getData('text/plain'), node.id, position);
+      }}
+      onClick={(event) => {
+        if (event.metaKey || event.ctrlKey || event.shiftKey) {
+          setSelection(selection.includes(node.id) ? selection.filter((id) => id !== node.id) : [...selection, node.id]);
+        } else setSelection([node.id]);
+      }}
+      onDoubleClick={() => {
+        setDraftName(node.name);
+        setRenaming(node.id);
+      }}
+      onContextMenu={(event) => onOpenContextMenu(event, node)}
+    >
+      {hasChildren ? (
+        <button
+          className="layer-disclosure"
+          onClick={(event) => {
+            event.stopPropagation();
+            const next = new Set(collapsed);
+            if (isExpanded) next.add(node.id); else next.delete(node.id);
+            setCollapsed(next);
+          }}
+        >
+          {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        </button>
+      ) : <span className="layer-disclosure-spacer" />}
+      <span className="layer-kind"><Icon size={14} className="layer-type-icon" strokeWidth={1.6} /></span>
+      {renaming === node.id ? (
+        <input
+          className="layer-name-input" value={draftName} autoFocus
+          onChange={(event) => setDraftName(event.target.value)}
+          onBlur={finishRename}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.currentTarget.blur();
+            if (event.key === 'Escape') {
+              setDraftName(node.name);
+              setRenaming(null);
+            }
+          }}
+          onClick={(event) => event.stopPropagation()}
         />
-      ))}
-    </>
+      ) : <span className="layer-name">{displayName}</span>}
+      <div className="layer-actions">
+        <button
+          title={node.locked ? 'Разблокировать' : 'Заблокировать'}
+          onClick={(event) => {
+            event.stopPropagation();
+            updateNode(node.id, { locked: !node.locked });
+          }}
+        >
+          {node.locked ? <Lock size={12} /> : <Unlock size={12} />}
+        </button>
+        <button
+          title={node.visible ? 'Скрыть' : 'Показать'}
+          onClick={(event) => {
+            event.stopPropagation();
+            updateNode(node.id, { visible: !node.visible });
+          }}
+        >
+          {node.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+        </button>
+      </div>
+    </div>
   );
-}
-
-function sameChildIds(left: EditorNode[] | undefined, right: EditorNode[] | undefined): boolean {
-  if (left === right) return true;
-  if (!left || !right || left.length !== right.length) return false;
-  return left.every((node, index) => node.id === right[index].id);
 }
 
 function sameLayerDisplay(before: EditorNode, after: EditorNode): boolean {
@@ -201,38 +189,11 @@ function sameLayerDisplay(before: EditorNode, after: EditorNode): boolean {
     (before.type !== 'text' || after.type !== 'text' || before.text === after.text);
 }
 
-function sameLayerSubtreeDisplay(
-  previousChildren: ReadonlyMap<string | null, EditorNode[]>,
-  nextChildren: ReadonlyMap<string | null, EditorNode[]>,
-  before: EditorNode,
-  after: EditorNode,
-): boolean {
-  if (!sameLayerDisplay(before, after)) return false;
-  const previousNodes = previousChildren.get(after.id);
-  const nextNodes = nextChildren.get(after.id);
-  if (!sameChildIds(previousNodes, nextNodes)) return false;
-  return nextNodes?.every((child, index) => sameLayerSubtreeDisplay(
-    previousChildren,
-    nextChildren,
-    previousNodes![index],
-    child,
-  )) ?? true;
-}
-
 function layerRowPropsEqual(previous: LayerRowProps, next: LayerRowProps): boolean {
-  if (previous.depth !== next.depth || previous.setCollapsed !== next.setCollapsed ||
-    previous.setRenaming !== next.setRenaming || previous.onOpenContextMenu !== next.onOpenContextMenu) return false;
-  // These contextual values must reach nested rows even when an ancestor's own
-  // display state is unchanged. They change only on explicit UI actions.
-  if (previous.collapsed !== next.collapsed || previous.renaming !== next.renaming) return false;
-  // A memoized ancestor must not hide a descendant's text/name/kind update.
-  // Transform-only document changes still skip the complete visible row tree.
-  return sameLayerSubtreeDisplay(
-    previous.childrenByParent,
-    next.childrenByParent,
-    previous.node,
-    next.node,
-  );
+  return previous.depth === next.depth && previous.hasChildren === next.hasChildren &&
+    previous.setCollapsed === next.setCollapsed && previous.setRenaming === next.setRenaming &&
+    previous.onOpenContextMenu === next.onOpenContextMenu && previous.collapsed === next.collapsed &&
+    previous.renaming === next.renaming && sameLayerDisplay(previous.node, next.node);
 }
 
 const LayerRow = memo(LayerRowComponent, layerRowPropsEqual);
@@ -251,6 +212,7 @@ export function LayersPanel({ hidden = false, panelsVisible, onTogglePanels }: L
   const [renaming, setRenaming] = useState<string | null>(null);
   const [tab, setTab] = useState<'layers' | 'library'>('layers');
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
+  const [scrollState, setScrollState] = useState({ top: 0, height: 0 });
   const layersTreeRef = useRef<HTMLDivElement>(null);
   const selectionKey = selection.join('|');
   const activePageId = getActivePageId(doc);
@@ -263,7 +225,7 @@ export function LayersPanel({ hidden = false, panelsVisible, onTogglePanels }: L
     });
     return map;
   }, [doc.nodes]);
-  const roots = (childrenByParent.get(null) ?? []).slice().reverse();
+  const rows = useMemo(() => flattenLayerRows(childrenByParent, collapsed), [childrenByParent, collapsed]);
   const openLayerContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>, node: EditorNode) => {
     event.preventDefault();
     event.stopPropagation();
@@ -293,14 +255,42 @@ export function LayersPanel({ hidden = false, panelsVisible, onTogglePanels }: L
   }, [selectionKey, activePageId]);
 
   useEffect(() => {
+    const tree = layersTreeRef.current;
+    if (!tree) return;
+    const updateSize = () => setScrollState((current) => ({ ...current, height: tree.clientHeight }));
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(tree);
+    updateSize();
+    return () => observer.disconnect();
+  }, [tab]);
+
+  useEffect(() => {
     if (!selectionKey || tab !== 'layers') return;
-    const id = selection[selection.length - 1];
     const frame = requestAnimationFrame(() => {
-      const row = layersTreeRef.current?.querySelector(`[data-layer-id="${CSS.escape(id)}"]`);
-      row?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      const tree = layersTreeRef.current;
+      if (!tree) return;
+      const index = rows.findIndex((row) => row.node.id === selection[selection.length - 1]);
+      if (index < 0) return;
+      const target = Math.max(0, index * LAYER_ROW_HEIGHT - tree.clientHeight / 2 + LAYER_ROW_HEIGHT / 2);
+      tree.scrollTop = target;
+      setScrollState({ top: tree.scrollTop, height: tree.clientHeight });
     });
     return () => cancelAnimationFrame(frame);
   }, [selectionKey, collapsed, tab, activePageId]);
+
+  useEffect(() => {
+    const tree = layersTreeRef.current;
+    if (!tree) return;
+    const maximum = Math.max(0, rows.length * LAYER_ROW_HEIGHT - tree.clientHeight);
+    if (tree.scrollTop > maximum) {
+      tree.scrollTop = maximum;
+      setScrollState({ top: maximum, height: tree.clientHeight });
+    }
+  }, [rows.length]);
+
+  const first = Math.max(0, Math.floor(scrollState.top / LAYER_ROW_HEIGHT) - LAYER_OVERSCAN);
+  const last = Math.min(rows.length, Math.ceil((scrollState.top + scrollState.height) / LAYER_ROW_HEIGHT) + LAYER_OVERSCAN);
+  const visibleRows = rows.slice(first, last);
 
   return (
     <aside
@@ -327,14 +317,23 @@ export function LayersPanel({ hidden = false, panelsVisible, onTogglePanels }: L
       </header>
       {tab === 'layers' && <PagesPanel />}
       {tab === 'layers' ? (
-        <div className="layers-tree" ref={layersTreeRef}>
-          {roots.length > 0 ? roots.map((node) => (
-            <LayerRow
-              key={node.id} childrenByParent={childrenByParent} node={node} depth={0}
-              collapsed={collapsed} setCollapsed={setCollapsed}
-              renaming={renaming} setRenaming={setRenaming} onOpenContextMenu={openLayerContextMenu}
-            />
-          )) : (
+        <div
+          className="layers-tree" ref={layersTreeRef} data-layer-count={rows.length}
+          onScroll={(event) => setScrollState({ top: event.currentTarget.scrollTop, height: event.currentTarget.clientHeight })}
+        >
+          {rows.length > 0 ? (
+            <div className="layers-virtual-spacer" style={{ height: rows.length * LAYER_ROW_HEIGHT }}>
+              {visibleRows.map((row, offset) => (
+                <div className="layer-virtual-row" style={{ transform: `translateY(${(first + offset) * LAYER_ROW_HEIGHT}px)` }} key={row.node.id}>
+                  <LayerRow
+                    node={row.node} depth={row.depth} hasChildren={row.hasChildren}
+                    collapsed={collapsed} setCollapsed={setCollapsed}
+                    renaming={renaming} setRenaming={setRenaming} onOpenContextMenu={openLayerContextMenu}
+                  />
+                </div>
+              ))}
+            </div>
+          ) : (
             <div className="layers-empty">
               <Layers3 size={24} strokeWidth={1.4} />
               <p>Здесь появятся<br />ваши объекты</p>

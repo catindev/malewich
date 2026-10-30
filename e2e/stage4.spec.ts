@@ -16,7 +16,7 @@ function frame(id: string, name: string, x: number, width = 500, height = 200): 
 
 async function seed(page: Page, nodes: Node[]) {
   const doc = { version: 1, id: 'stage4-doc', name: 'Этап 4', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), nodes };
-  await page.addInitScript((document) => localStorage.setItem('forma:document:v1', JSON.stringify(document)), doc);
+  await page.addInitScript((document) => localStorage.setItem('malewich:document:v1', JSON.stringify(document)), doc);
   await page.goto('/?hitLayer=1');
   await expect(page.locator('.editor-svg')).toBeVisible();
 }

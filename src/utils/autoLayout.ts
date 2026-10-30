@@ -1,4 +1,5 @@
 import type { DesignDocument, EditorNode, FrameNode } from '../types';
+import { isEditorNodeEqual } from './document';
 
 function defaultPadding() {
   return { top: 0, right: 0, bottom: 0, left: 0 };
@@ -148,7 +149,10 @@ export function applyAutoLayout(doc: DesignDocument, scope?: ReadonlySet<string>
 
     nodes.filter((node): node is FrameNode => node.type === 'frame').forEach(visit);
     if (!changed) break;
-    result = { ...result, nodes };
+    // A scoped reflow must not make untouched siblings look edited to WeakMap
+    // indexes, React memoization or the retained renderer.
+    const preserved = nodes.map((node, index) => isEditorNodeEqual(node, result.nodes[index]) ? result.nodes[index] : node);
+    result = { ...result, nodes: preserved };
   }
   return result;
 }

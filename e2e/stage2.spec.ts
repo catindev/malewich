@@ -20,7 +20,7 @@ function textNode(id: string, name: string, value: string, width: number, height
 
 async function seed(page: Page, nodes: Node[]) {
   const doc = { version: 1, id: 'stage2-doc', name: 'Этап 2', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), nodes };
-  await page.addInitScript((document) => localStorage.setItem('forma:document:v1', JSON.stringify(document)), doc);
+  await page.addInitScript((document) => localStorage.setItem('malewich:document:v1', JSON.stringify(document)), doc);
   await page.goto('/?hitLayer=1');
   await expect(page.locator('.editor-svg')).toBeVisible();
 }
