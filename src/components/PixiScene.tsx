@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { Application, Container, Graphics, Sprite, Text, Texture } from 'pixi.js';
-import type { DesignDocument, EditorNode, TextNode, Viewport } from '../types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Application, CanvasTextMetrics, Container, Graphics, GraphicsPath, Sprite, Text, Texture } from 'pixi.js';
+import type { DesignDocument, EditorNode, Point, TextNode, Viewport } from '../types';
 import { getTextLines } from '../utils/text';
+import { getActivePageId } from '../utils/pages';
+import { textResolutionForZoom, vectorFillPaths } from '../utils/rendering';
 
 interface PixiSceneProps {
   doc: DesignDocument;
@@ -9,17 +11,37 @@ interface PixiSceneProps {
   editingId: string | null;
   panning: boolean;
   movingIds: string[];
+  moveDelta: Point | null;
   suppressedIds: Set<string>;
   onFallback: () => void;
+}
+
+interface TextChunk {
+  view: Text;
+  resolution: number;
+}
+
+interface TextVisualState {
+  base: Text;
+  chunks: Container;
+  items: TextChunk[];
+  chunkKey: string | null;
+  measured: CanvasTextMetrics;
 }
 
 interface NodeView {
   source: EditorNode;
   container: Container;
   visual: Container | null;
+  text: TextVisualState | null;
   mask: Graphics | null;
   cleanup: (() => void) | null;
   invalidate: () => void;
+}
+
+interface PageScene {
+  world: Container;
+  views: Map<string, NodeView>;
 }
 
 function paint(value: string): { color: number; alpha: number } {
@@ -67,12 +89,12 @@ function createShapeVisual(node: EditorNode): Container {
   return group;
 }
 
-function createTextVisual(node: TextNode): Text {
+function createTextVisual(node: TextNode): { visual: Container; state: TextVisualState } {
   const anchor = node.textAlign === 'center' ? 0.5 : node.textAlign === 'right' ? 1 : 0;
   const x = node.textAlign === 'center'
     ? node.x + node.width / 2
     : node.textAlign === 'right' ? node.x + node.width : node.x;
-  const text = new Text({
+  const base = new Text({
     text: getTextLines(node).join('\n'),
     style: {
       fill: paint(node.fill).color,
@@ -87,19 +109,96 @@ function createTextVisual(node: TextNode): Text {
       padding: 4,
     },
   });
-  text.anchor.set(anchor, 0);
-  text.position.set(x, node.y);
-  text.resolution = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
-  return text;
+  base.anchor.set(anchor, 0);
+  base.position.set(x, node.y);
+  base.resolution = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  const chunks = new Container({ label: `text-tiles:${node.id}` });
+  chunks.visible = false;
+  const visual = new Container();
+  visual.addChild(base, chunks);
+  return {
+    visual,
+    state: {
+      base,
+      chunks,
+      items: [],
+      chunkKey: null,
+      measured: CanvasTextMetrics.measureText(base.text, base.style),
+    },
+  };
+}
+
+function clearTextChunks(state: TextVisualState): void {
+  for (const child of state.chunks.removeChildren()) child.destroy();
+  state.items = [];
+  state.chunkKey = null;
+}
+
+function buildTextChunks(state: TextVisualState, desiredResolution: number, textureLimit: number): void {
+  const key = `${desiredResolution}:${textureLimit}`;
+  if (state.chunkKey === key) return;
+  clearTextChunks(state);
+  const { base, measured } = state;
+  const padding = base.style.padding;
+  const baseLeft = base.x - base.anchor.x * measured.width;
+  const initialResolution = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+
+  measured.lines.forEach((line, lineIndex) => {
+    if (!line) return;
+    const lineResolution = Math.max(1, Math.min(
+      desiredResolution,
+      Math.floor(textureLimit / Math.max(1, Math.ceil(measured.lineHeight + padding * 2))),
+    ));
+    const maxChunkWidth = Math.max(1, Math.floor(textureLimit / lineResolution - padding * 2));
+    const alignOffset = base.style.align === 'center'
+      ? (measured.maxLineWidth - measured.lineWidths[lineIndex]) / 2
+      : base.style.align === 'right' ? measured.maxLineWidth - measured.lineWidths[lineIndex] : 0;
+    const lineStart = baseLeft + alignOffset;
+    const graphemes = CanvasTextMetrics.graphemeSegmenter(line);
+    let start = 0;
+    let current = '';
+
+    const append = (text: string, startIndex: number) => {
+      if (!text) return;
+      const style = base.style.clone();
+      style.align = 'left';
+      const view = new Text({ text, style, resolution: initialResolution });
+      view.anchor.set(0, 0);
+      const prefix = line.slice(0, startIndex);
+      const offset = prefix ? CanvasTextMetrics.measureText(prefix, base.style).width : 0;
+      view.position.set(lineStart + offset, base.y + lineIndex * measured.lineHeight);
+      view.cullable = true;
+      state.chunks.addChild(view);
+      state.items.push({ view, resolution: lineResolution });
+    };
+
+    graphemes.forEach((grapheme, index) => {
+      const candidate = current + grapheme;
+      if (current && CanvasTextMetrics.measureText(candidate, base.style).width > maxChunkWidth) {
+        append(current, start);
+        start = index;
+        current = grapheme;
+      } else current = candidate;
+    });
+    append(current, start);
+  });
+  state.chunkKey = key;
 }
 
 function createVectorVisual(node: Extract<EditorNode, { type: 'vector' }>): Container {
-  // Keep paint attributes on the SVG path itself. Calling fill()/stroke() after
-  // Graphics.svg() adds another path style and leaves the parser's default
-  // black fill in place for transparent vectors.
-  const graphics = new Graphics().svg(
-    `<svg xmlns="http://www.w3.org/2000/svg"><path d="${node.path}" fill="${node.fill}" fill-rule="${node.fillRule ?? 'nonzero'}" stroke="${node.stroke}" stroke-width="${node.strokeWidth}"/></svg>`,
-  );
+  const graphics = new Graphics();
+  const fillPaint = paint(node.fill);
+  const strokePaint = paint(node.stroke);
+  if (fillPaint.alpha > 0) {
+    // Pixi's SVG parser drops holes in nonzero paths. Build outer+hole groups
+    // explicitly from the editable path instead of rasterizing the vector.
+    for (const data of vectorFillPaths(node.path, node.fillRule)) {
+      graphics.path(new GraphicsPath(data, true)).fill(fillPaint);
+    }
+  }
+  if (strokePaint.alpha > 0 && node.strokeWidth > 0) {
+    graphics.path(new GraphicsPath(node.path)).stroke({ ...strokePaint, width: node.strokeWidth });
+  }
   graphics.position.set(node.x, node.y);
   graphics.scale.set(node.width / node.pathWidth, node.height / node.pathHeight);
   return graphics;
@@ -156,7 +255,7 @@ function createMask(node: EditorNode): Graphics {
 function createView(node: EditorNode, invalidate: () => void): NodeView {
   const container = new Container({ label: node.id });
   container.cullable = true;
-  const view: NodeView = { source: node, container, visual: null, mask: null, cleanup: null, invalidate };
+  const view: NodeView = { source: node, container, visual: null, text: null, mask: null, cleanup: null, invalidate };
   updateView(view, node, { forceRebuild: true });
   return view;
 }
@@ -208,17 +307,22 @@ function updateView(
     view.mask = null;
   }
   view.source = node;
+  view.text = null;
   const { container } = view;
   const centerX = node.x + node.width / 2;
   const centerY = node.y + node.height / 2;
   container.position.set(centerX, centerY);
   container.pivot.set(centerX, centerY);
   container.rotation = node.rotation * Math.PI / 180;
+  container.scale.set(node.flipX ? -1 : 1, node.flipY ? -1 : 1);
   container.alpha = node.opacity;
   container.label = node.id;
 
-  if (node.type === 'text') view.visual = createTextVisual(node);
-  else if (node.type === 'vector') view.visual = createVectorVisual(node);
+  if (node.type === 'text') {
+    const { visual, state } = createTextVisual(node);
+    view.visual = visual;
+    view.text = state;
+  } else if (node.type === 'vector') view.visual = createVectorVisual(node);
   else if (node.type === 'image') view.visual = createImageVisual(node, view);
   else view.visual = createShapeVisual(node);
   container.addChildAt(view.visual, 0);
@@ -230,7 +334,20 @@ function updateView(
   }
 }
 
-export function PixiScene({ doc, viewport, editingId, panning, movingIds, suppressedIds, onFallback }: PixiSceneProps) {
+const textureLimits = new WeakMap<HTMLCanvasElement, number>();
+
+function textTextureLimit(canvas: HTMLCanvasElement | null): number {
+  if (!canvas) return 8192;
+  const cached = textureLimits.get(canvas);
+  if (cached) return cached;
+  const gl = canvas.getContext('webgl2');
+  const reported = gl ? Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) : 8192;
+  const limit = Math.max(1024, Math.min(8192, reported || 8192));
+  textureLimits.set(canvas, limit);
+  return limit;
+}
+
+export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDelta, suppressedIds, onFallback }: PixiSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragCanvasRef = useRef<HTMLCanvasElement>(null);
   const appRef = useRef<Application | null>(null);
@@ -243,12 +360,18 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, suppre
     starts: Map<string, { x: number; y: number }>;
   } | null>(null);
   const viewsRef = useRef(new Map<string, NodeView>());
+  const pageScenesRef = useRef(new Map<string, PageScene>());
+  const sceneDocumentIdRef = useRef<string | null>(null);
   const renderedViewportRef = useRef(viewport);
+  const latestViewportRef = useRef(viewport);
+  latestViewportRef.current = viewport;
+  const zoomTimerRef = useRef(0);
+  const renderFrameRef = useRef(0);
   const [ready, setReady] = useState(false);
   const movingSignature = movingIds.join('|');
-  const fontSignature = [...new Set(doc.nodes.flatMap((node) => node.type === 'text'
+  const fontSignature = useMemo(() => [...new Set(doc.nodes.flatMap((node) => node.type === 'text'
     ? [`${node.fontWeight} ${node.fontSize}px ${node.fontFamily}`]
-    : []))].sort().join('|');
+    : []))].sort().join('|'), [doc.nodes]);
   const [loadedFontSignature, setLoadedFontSignature] = useState<string | null>(null);
 
   const renderNow = (
@@ -257,14 +380,90 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, suppre
     nextViewport: Viewport,
     targetCanvas: HTMLCanvasElement | null = canvasRef.current,
   ) => {
+    window.clearTimeout(zoomTimerRef.current);
+    zoomTimerRef.current = 0;
     const canvas = targetCanvas;
-    if (canvas) canvas.style.transform = '';
+    if (canvas) {
+      canvas.style.transform = '';
+      delete canvas.dataset.zoomPreview;
+    }
     world.position.set(nextViewport.x, nextViewport.y);
     world.scale.set(nextViewport.zoom);
+    const textResolution = textResolutionForZoom(nextViewport.zoom, window.devicePixelRatio || 1);
+    const screenWidth = canvas?.clientWidth ?? app.screen.width;
+    const screenHeight = canvas?.clientHeight ?? app.screen.height;
+    const textureLimit = textTextureLimit(canvas);
+    let rasterizedTextCount = 0;
+    let chunkedTextCount = 0;
+    for (const view of viewsRef.current.values()) {
+      if (!view.text) continue;
+      // A conservative screen-space circle includes every rotation. Offscreen
+      // text keeps its old texture until it actually enters the viewport.
+      const source = view.source;
+      const centerX = (source.x + source.width / 2) * nextViewport.zoom + nextViewport.x;
+      const centerY = (source.y + source.height / 2) * nextViewport.zoom + nextViewport.y;
+      const radius = Math.hypot(source.width, source.height) * nextViewport.zoom / 2 + 64;
+      if (centerX + radius < 0 || centerX - radius > screenWidth || centerY + radius < 0 || centerY - radius > screenHeight) continue;
+      let current: Container | null = view.container;
+      let displayed = true;
+      while (current) {
+        if (!current.visible) { displayed = false; break; }
+        if (current === world) break;
+        current = current.parent;
+      }
+      if (!displayed) continue;
+
+      const state = view.text;
+      const padding = state.base.style.padding * 2;
+      const fullWidth = Math.ceil(state.measured.width + padding);
+      const fullHeight = Math.ceil(state.measured.height + padding);
+      const needsChunks = fullWidth * textResolution > textureLimit || fullHeight * textResolution > textureLimit;
+      if (!needsChunks) {
+        state.base.visible = true;
+        state.chunks.visible = false;
+        if (state.base.resolution !== textResolution) {
+          state.base.resolution = textResolution;
+          rasterizedTextCount += 1;
+        }
+        continue;
+      }
+
+      // A single high-resolution texture for a long text node can exceed the
+      // GPU limit. Tile the editable text into retained line fragments instead
+      // of stretching an artificially capped 8x texture over the whole zoom.
+      buildTextChunks(state, textResolution, textureLimit);
+      state.base.visible = false;
+      state.chunks.visible = true;
+      chunkedTextCount += 1;
+      for (const item of state.items) {
+        if (item.view.resolution === item.resolution) continue;
+        const bounds = item.view.getBounds();
+        if (bounds.maxX < 0 || bounds.minX > screenWidth || bounds.maxY < 0 || bounds.minY > screenHeight) continue;
+        item.view.resolution = item.resolution;
+        rasterizedTextCount += 1;
+      }
+    }
+    if (canvas) {
+      canvas.dataset.textResolution = String(textResolution);
+      canvas.dataset.rasterizedText = String(rasterizedTextCount);
+      canvas.dataset.chunkedText = String(chunkedTextCount);
+    }
     renderedViewportRef.current = nextViewport;
     const started = performance.now();
     app.render();
     if (canvas) canvas.dataset.renderMs = String(Math.round(performance.now() - started));
+  };
+
+  const scheduleRender = () => {
+    if (renderFrameRef.current) return;
+    renderFrameRef.current = requestAnimationFrame(() => {
+      renderFrameRef.current = 0;
+      const currentApp = appRef.current;
+      const currentWorld = worldRef.current;
+      if (currentApp && currentWorld && !previewRef.current) {
+        renderNow(currentApp, currentWorld, latestViewportRef.current);
+      }
+    });
   };
 
   useEffect(() => {
@@ -317,6 +516,8 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, suppre
       cancelled = true;
       previewRef.current = null;
       viewsRef.current.clear();
+      pageScenesRef.current.clear();
+      sceneDocumentIdRef.current = null;
       worldRef.current = null;
       dragWorldRef.current = null;
       appRef.current = null;
@@ -327,13 +528,68 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, suppre
   }, [onFallback]);
 
   useEffect(() => {
+    const parent = canvasRef.current?.parentElement;
+    if (!ready || !parent) return;
+    const observer = new ResizeObserver(() => {
+      const width = Math.max(1, parent.clientWidth);
+      const height = Math.max(1, parent.clientHeight);
+      const app = appRef.current;
+      const dragApp = dragAppRef.current;
+      // Pixi's ResizePlugin observes window.resize only. Flex/layout changes
+      // require explicitly resizing both drawing buffers to their container.
+      if (app && (app.screen.width !== width || app.screen.height !== height)) app.renderer.resize(width, height);
+      if (dragApp && (dragApp.screen.width !== width || dragApp.screen.height !== height)) dragApp.renderer.resize(width, height);
+      if (previewRef.current && app && dragApp && worldRef.current && dragWorldRef.current) {
+        const dragCanvas = dragCanvasRef.current;
+        const transform = dragCanvas?.style.transform ?? '';
+        renderNow(app, worldRef.current, latestViewportRef.current);
+        renderNow(dragApp, dragWorldRef.current, latestViewportRef.current, dragCanvas);
+        if (dragCanvas) dragCanvas.style.transform = transform;
+      } else {
+        // Resizing clears WebGL. Coalesce it with other async invalidations.
+        scheduleRender();
+      }
+    });
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [ready]);
+
+  useEffect(() => {
     const app = appRef.current;
     const dragApp = dragAppRef.current;
-    const world = worldRef.current;
+    let world = worldRef.current;
     const dragWorld = dragWorldRef.current;
     const dragCanvas = dragCanvasRef.current;
     if (!ready || !app || !dragApp || !world || !dragWorld || !dragCanvas || loadedFontSignature !== fontSignature) return;
-    const views = viewsRef.current;
+    if (sceneDocumentIdRef.current !== null && sceneDocumentIdRef.current !== doc.id) {
+      for (const cached of pageScenesRef.current.values()) {
+        for (const view of cached.views.values()) view.cleanup?.();
+        cached.world.destroy({ children: true });
+      }
+      pageScenesRef.current.clear();
+      world = new Container({ label: 'document' });
+      app.stage.addChild(world);
+      worldRef.current = world;
+      viewsRef.current = new Map();
+    }
+    sceneDocumentIdRef.current = doc.id;
+    const pageId = getActivePageId(doc);
+    const pageScenes = pageScenesRef.current;
+    let pageScene = pageScenes.get(pageId);
+    if (!pageScene) {
+      // Keep each visited page as a retained scene. Returning to a page must not
+      // recreate thousands of Graphics and text textures; no bitmap root cache
+      // or continuous renderer is involved.
+      const cachedWorld = pageScenes.size === 0 ? world : new Container({ label: `page:${pageId}` });
+      if (!cachedWorld.parent) app.stage.addChild(cachedWorld);
+      pageScene = { world: cachedWorld, views: pageScenes.size === 0 ? viewsRef.current : new Map() };
+      pageScenes.set(pageId, pageScene);
+    }
+    for (const cached of pageScenes.values()) cached.world.visible = cached === pageScene;
+    worldRef.current = pageScene.world;
+    world = pageScene.world;
+    viewsRef.current = pageScene.views;
+    const views = pageScene.views;
     const previewIds = movingSignature ? movingSignature.split('|') : [];
     const previousPreview = previewRef.current;
     let preview = previousPreview?.signature === movingSignature ? previousPreview : null;
@@ -370,7 +626,7 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, suppre
         dragWorld.addChild(view.container);
       }
       for (const [id, view] of views) {
-        view.container.visible = view.source.visible && !suppressedIds.has(id) && !(editingId === id && view.source.type === 'text');
+        view.container.visible = view.source.visible && !view.source.isMask && !suppressedIds.has(id) && !(editingId === id && view.source.type === 'text');
       }
       dragCanvas.style.visibility = 'visible';
       dragCanvas.style.transform = '';
@@ -379,7 +635,7 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, suppre
     }
 
     const invalidate = () => {
-      if (appRef.current === app && !previewRef.current) app.render();
+      if (appRef.current === app && !previewRef.current) scheduleRender();
     };
     for (const node of doc.nodes) {
       let view = views.get(node.id);
@@ -408,43 +664,76 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, suppre
       }
     }
     for (const [id, view] of views) {
-      view.container.visible = view.source.visible && !suppressedIds.has(id) && !(editingId === id && view.source.type === 'text');
+      view.container.visible = view.source.visible && !view.source.isMask && !suppressedIds.has(id) && !(editingId === id && view.source.type === 'text');
     }
     if (preview) {
       const id = previewIds.find((candidate) => preview.starts.has(candidate) && views.has(candidate));
       const start = id ? preview.starts.get(id) : undefined;
       const current = id ? views.get(id)?.container.getGlobalPosition() : undefined;
       if (start && current) {
-        dragCanvas.style.transform = `translate3d(${current.x - start.x}px, ${current.y - start.y}px, 0px)`;
+        const x = moveDelta ? moveDelta.x * viewport.zoom : current.x - start.x;
+        const y = moveDelta ? moveDelta.y * viewport.zoom : current.y - start.y;
+        dragCanvas.style.transform = `translate3d(${x}px, ${y}px, 0px)`;
       }
       return;
     }
     renderNow(app, world, viewport);
+    if (canvasRef.current) canvasRef.current.dataset.scenePage = pageId;
   }, [doc, fontSignature, loadedFontSignature, movingSignature, ready]);
+
+  useEffect(() => {
+    const dragCanvas = dragCanvasRef.current;
+    if (!moveDelta || !previewRef.current || !dragCanvas) return;
+    // Deferred root moves update only the compositor, not the document scene.
+    dragCanvas.style.transform = `translate3d(${moveDelta.x * viewport.zoom}px, ${moveDelta.y * viewport.zoom}px, 0px)`;
+  }, [moveDelta, viewport.zoom]);
 
   useEffect(() => {
     const app = appRef.current;
     const world = worldRef.current;
     if (!ready || !app || !world || loadedFontSignature !== fontSignature || previewRef.current) return;
+    const rendered = renderedViewportRef.current;
+    window.clearTimeout(zoomTimerRef.current);
+    const canvas = canvasRef.current;
     if (panning) {
-      const canvas = canvasRef.current;
-      const rendered = renderedViewportRef.current;
       if (canvas) {
         canvas.style.transform = `translate3d(${viewport.x - rendered.x}px, ${viewport.y - rendered.y}px, 0px)`;
       }
       return;
     }
-    renderNow(app, world, viewport);
+    if (rendered.x === viewport.x && rendered.y === viewport.y && rendered.zoom === viewport.zoom) return;
+    if (canvas) {
+      // Keep wheel/pinch zoom on the compositor. Rebuilding every text texture
+      // and drawing the full WebGL scene per wheel event made Retina zoom lag.
+      const scale = viewport.zoom / rendered.zoom;
+      const x = viewport.x - rendered.x * scale;
+      const y = viewport.y - rendered.y * scale;
+      canvas.style.transform = `translate3d(${x}px, ${y}px, 0px) scale(${scale})`;
+      canvas.dataset.zoomPreview = 'true';
+    }
+    zoomTimerRef.current = window.setTimeout(() => {
+      const currentApp = appRef.current;
+      const currentWorld = worldRef.current;
+      if (currentApp && currentWorld && !previewRef.current) {
+        renderNow(currentApp, currentWorld, latestViewportRef.current);
+      }
+    }, 90);
+    return () => window.clearTimeout(zoomTimerRef.current);
   }, [fontSignature, loadedFontSignature, panning, ready, viewport]);
+
+  useEffect(() => () => {
+    window.clearTimeout(zoomTimerRef.current);
+    cancelAnimationFrame(renderFrameRef.current);
+  }, []);
 
   useEffect(() => {
     const app = appRef.current;
     if (!ready || !app) return;
     for (const [id, view] of viewsRef.current) {
-      view.container.visible = view.source.visible && !suppressedIds.has(id) && !(editingId === id && view.source.type === 'text');
+      view.container.visible = view.source.visible && !view.source.isMask && !suppressedIds.has(id) && !(editingId === id && view.source.type === 'text');
     }
-    if (!previewRef.current) app.render();
-  }, [editingId, ready, suppressedIds]);
+    if (!previewRef.current) scheduleRender();
+  }, [editingId, ready]);
 
   return (
     <>

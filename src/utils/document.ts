@@ -87,6 +87,31 @@ interface DocumentIndex {
 
 const documentIndexes = new WeakMap<DesignDocument, DocumentIndex>();
 
+function equalSerializableValues(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== typeof right || left === null || right === null) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => equalSerializableValues(value, right[index]));
+  }
+  if (typeof left === 'object') {
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    // JSON history checks ignored undefined object properties; retain that contract.
+    const leftKeys = Object.keys(leftRecord).filter((key) => leftRecord[key] !== undefined);
+    const rightKeys = Object.keys(rightRecord).filter((key) => rightRecord[key] !== undefined);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.hasOwn(rightRecord, key)
+      && equalSerializableValues(leftRecord[key], rightRecord[key]));
+  }
+  return false;
+}
+
+/** Deep comparison with reference short-circuiting for immutable document branches. */
+export function isDocumentContentEqual(left: DesignDocument, right: DesignDocument): boolean {
+  return equalSerializableValues(left, right);
+}
+
 function getDocumentIndex(doc: DesignDocument): DocumentIndex {
   const cached = documentIndexes.get(doc);
   if (cached) return cached;

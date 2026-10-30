@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, X } from 'lucide-react';
 import type { DesignDocument } from '../types';
-import { documentToSvg } from '../utils/export';
+import { getNodeBounds, getWorldMatrix } from '../utils/document';
+import { SceneNode } from './SceneNode';
 
 interface PrototypePlayerProps {
   doc: DesignDocument;
@@ -12,14 +13,17 @@ interface PrototypePlayerProps {
 export function PrototypePlayer({ doc, initialFrameId, onClose }: PrototypePlayerProps) {
   const [currentFrameId, setCurrentFrameId] = useState(initialFrameId);
   const [history, setHistory] = useState<string[]>([]);
+  const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const currentFrame = doc.nodes.find((node) => node.id === currentFrameId);
   const rootFrames = doc.nodes.filter((node) => node.type === 'frame' && node.parentId === null);
   const link = doc.prototypeLinks?.find((item) => item.sourceFrameId === currentFrameId);
-  const image = useMemo(() => {
-    if (!currentFrame) return '';
-    const { svg } = documentToSvg(doc, [currentFrameId]);
-    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-  }, [doc, currentFrame, currentFrameId]);
+  const bounds = currentFrame ? getNodeBounds(doc, currentFrame) : null;
+  const scale = bounds && stageSize
+    ? Math.min(stageSize.width / Math.max(1, bounds.width), stageSize.height / Math.max(1, bounds.height))
+    : 1;
+  const displayWidth = Math.max(1, (bounds?.width ?? 1) * scale);
+  const displayHeight = Math.max(1, (bounds?.height ?? 1) * scale);
 
   const goNext = () => {
     if (!link) return;
@@ -34,6 +38,19 @@ export function PrototypePlayer({ doc, initialFrameId, onClose }: PrototypePlaye
   };
 
   useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    const update = () => {
+      const rect = stage.getBoundingClientRect();
+      setStageSize({ width: Math.max(1, rect.width - 80), height: Math.max(1, rect.height - 80) });
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(stage);
+    update();
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
       if (event.key === 'ArrowRight') goNext();
@@ -43,9 +60,9 @@ export function PrototypePlayer({ doc, initialFrameId, onClose }: PrototypePlaye
     return () => window.removeEventListener('keydown', handler);
   });
 
-  if (!currentFrame) return null;
+  if (!currentFrame || !bounds) return null;
   return (
-    <div className="prototype-overlay" role="dialog" aria-label="Предпросмотр прототипа">
+    <div className="prototype-overlay" role="dialog" aria-modal="true" aria-label="Предпросмотр прототипа" onContextMenu={(event) => event.preventDefault()}>
       <header className="prototype-topbar">
         <div className="prototype-title">
           <span className="prototype-status-dot" />
@@ -62,15 +79,22 @@ export function PrototypePlayer({ doc, initialFrameId, onClose }: PrototypePlaye
           <button aria-label="Закрыть предпросмотр" onClick={onClose}><X size={18} /></button>
         </div>
       </header>
-      <div className="prototype-stage">
-        {image && (
-          <img
-            key={currentFrameId} src={image} alt={currentFrame.name}
-            className={`prototype-frame is-${link?.transition ?? 'instant'}`}
-            style={{ animationDuration: `${link?.duration ?? 0}ms` }}
-            onClick={goNext}
+      <div className="prototype-stage" ref={stageRef}>
+        <svg
+          key={currentFrameId}
+          className={`prototype-frame is-${link?.transition ?? 'instant'}`}
+          viewBox={`${bounds.x} ${bounds.y} ${Math.max(1, bounds.width)} ${Math.max(1, bounds.height)}`}
+          width={displayWidth} height={displayHeight}
+          preserveAspectRatio="xMidYMid meet"
+          role="img" aria-label={currentFrame.name}
+          style={{ animationDuration: `${link?.duration ?? 0}ms`, width: displayWidth, height: displayHeight }}
+          onClick={goNext}
+        >
+          <SceneNode
+            doc={doc} node={currentFrame} worldTransform={getWorldMatrix(doc, currentFrame)}
+            onNodePointerDown={() => {}} onTextDoubleClick={() => {}} onNodeContextMenu={() => {}}
           />
-        )}
+        </svg>
       </div>
       <footer className="prototype-footer">
         {link ? 'Кликните по макету или «Дальше», чтобы перейти по связи' : 'У этого фрейма нет исходящей связи'}

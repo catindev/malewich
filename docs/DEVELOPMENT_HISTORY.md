@@ -62,8 +62,10 @@ Auto Layout был реализован как scoped resolver, а не как C
 
 - Локальная page-space геометрия сохраняется при открытии через `preserveSavedGeometry`.
 - Manrope поставляется локально и загружается через FontFaceSet до создания Pixi text textures.
-- SVG vector paths сохраняют собственные fill/stroke/fill-rule.
+- SVG vector paths сохраняют собственные fill/stroke/fill-rule. В WebGL closed contours дополнительно группируются по вложенности и фактическому winding: Pixi 8 иначе не вырезает holes у `nonzero` и зависит от порядка subpaths. Это исправляет внутренний вырез буквы «б» ТКБ без изменения сохранённой редактируемой геометрии.
 - Expanded `strokeGeometry` заливается paint без повторной обводки.
+- Если derived fill/stroke geometry отсутствует, `vectorNetwork` преобразуется в SVG curves и open segments; прямоугольная заглушка не подменяет иконку.
+- Figma `isMask` сохраняется в модели, а mask-контур не рисуется как обычная заливка. Это убирает чёрные подложки логотипов, но не означает полноценную поддержку всех mask compositing modes.
 - Видимые Figma-страницы сохраняются как страницы Malewich; Internal Only Canvas пропускается.
 
 ### Осознанные ограничения
@@ -92,8 +94,8 @@ Auto Layout был реализован как scoped resolver, а не как C
 ### Ошибки перехода и их исправления
 
 1. **Пустой canvas.** Начальный `updateView()` принял чистое создание за translation и не создал visuals. Добавлен forced initial rebuild и non-blank browser assertion.
-2. **Serif/обрезанный текст.** Нужны явная загрузка Manrope, корректный baseline и padding.
-3. **Чёрные иконки.** Pixi SVG parser добавлял default black fill; paint attributes перенесены в сам SVG.
+2. **Serif/обрезанный текст.** Нужны явная загрузка Manrope, корректный baseline и padding. Позднее обнаружилось размытие при zoom: текстовая текстура имела постоянное device resolution и растягивалась мировым transform. Сначала разрешение существующих `Text` синхронизировалось с zoom и DPR с ограничением 8×. Этого оказалось недостаточно на 6400%: растр снова растягивался. Теперь ограничение 8× убрано, а строки, не помещающиеся в GPU texture limit, делятся на retained-фрагменты; высокое разрешение получают только видимые фрагменты без изменения документа или пересоздания всей сцены.
+3. **Чёрные иконки.** Pixi SVG parser добавлял default black fill; paint attributes перенесены в сам SVG. При переходе на прямое построение `GraphicsPath` прозрачность передаётся отдельно, а fill contours обходят ограничение parser с `nonzero` holes.
 4. **Белый экран на больших изображениях.** `Texture.from(string)` читал Assets cache, а не загружал URL. Теперь texture создаётся после загрузки `HTMLImageElement`.
 5. **Лист не двигался или двигался дважды.** Изменены правила retained transforms и добавлены pixel-тесты.
 6. **Dots поверх макета и UI.** Grid вынесен в отдельный нижний SVG layer; stacking и pointer-events исправлены без удаления самой сетки.
@@ -118,19 +120,45 @@ SVG не удалён полностью: он нужен для selection handl
 
 1. WeakMap-индексы документа и indexed Auto Layout pass.
 2. Snap bounds один раз на начало жеста.
-3. Пропуск derived pipeline только когда parent-relative геометрия действительно сохраняется и main components не затронуты.
+3. Пропуск variables/Auto Layout derived pipeline только когда parent-relative геометрия действительно сохраняется. Отдельный non-translation check позволяет чистому X/Y main component обходить component reconciliation: instance roots, геометрия и identities остаются неизменными, что закреплено unit-регрессией.
 4. Retained visuals для pure translation с нормализованными transforms.
 5. Transient preview корневого фрейма в отдельном canvas: существующее поддерево двигается композитором, а при отпускании возвращается в основной WebGL scene.
+6. Deferred root move: промежуточные pointer steps хранят только `rootIds` и последний delta, оставляя `state.doc` immutable. Artwork, selection и подпись корневого фрейма получают один и тот же compositor delta; release создаёт ровно один document commit/history entry. Поэтому Inspector X/Y корня обновляется на release, а не на каждом pointer step.
 
-RenderTexture-кэш корня сознательно не используется. Для nested frames compositor preview ограничен, чтобы не потерять clipping и transforms предков.
+RenderTexture-кэш корня сознательно не используется. Для nested frames, Auto Layout и reparenting сохраняется полный document path, чтобы не потерять clipping, transforms предков и правила layout.
 
-Результат одинакового diagnostic-сценария: примерно **18 039 → 2 729 мс**. Обычный path без hit layer — около **2 341 мс**, корневой текст — **538 мс**. Это software-WebGL диагностика, а не обещание одинакового времени на любом GPU. Начальный и финальный renders всё ещё зависят от растеризации.
+Результат одинакового diagnostic-сценария TCB.PAY: примерно **18 039 → 2 729 мс**. Обычный path без hit layer — около **2 341 мс**, корневой текст — **538 мс**. Отдельный реальный фрейм `ТКБ/Уведомления/Боковая навигация` в SMZ (52 descendants) после отказа от лишней component sync, React-обновлений Layers и промежуточных commits сократил 12-step жест примерно с **10,5 до 1,88–1,94 с**. Это software-WebGL диагностика, а не обещание одинакового времени на любом GPU. Начальный и финальный renders всё ещё зависят от растеризации и составляют основную оставшуюся стоимость последнего профиля.
+
+### Compositor zoom и предел 25 600%
+
+Zoom-dependent текстуры сделали буквы резкими, но первый вариант пересоздавал разрешение всех текстов и рисовал полный WebGL-кадр на каждом wheel event. На SMZ шаги диагностического жеста занимали примерно 347–1681 мс. Теперь каждый viewport change сразу задаёт canvas CSS `translate3d(...) scale(...)` относительно последнего WebGL-кадра. Через 90 мс паузы выполняется один финальный render; новое text resolution получают только видимые и не скрытые предками `Text`. Повторный профиль тех же шагов показал около 60–66 мс с активным compositor preview на каждом шаге. Это по-прежнему software-WebGL диагностика, а не универсальный GPU benchmark.
+
+Диапазон viewport расширен до `0.05–256`, то есть 5–25 600%, включая fit-to-selection и presets. Вместо прежнего ограничения 8× длинный текст делится на фрагменты, размер которых ограничен возможностями GPU; это не заявление о бесконечно векторной резкости, но устраняет искусственное размытие обычных строк на большом zoom. Browser regression проверяет compositor preview и точный RGBA-pixel известной заливки на 25 600% и после возврата к 100%. Отдельная диагностика на реальном TCB.PAY зафиксировала `#18191F` в точке текстового штриха на 25 600%.
+
+При этой проверке важен выбор координаты: центр text bounds на крайнем zoom может попасть в пробел между буквами и дать закономерно пустой кадр. Поэтому сначала на 400% находится реальный закрашенный pixel с закрашенными соседями, затем его мировая координата становится anchor для 25 600%. Наличие scene graph, отсутствие JS errors или успешный `app.render()` сами по себе не доказывают видимый результат.
+
+### Повторный разбор OpenPencil: scheduling и derived work
+
+Поверх уже перенесённых transient preview и раздельной инвалидации были повторно прочитаны `packages/vue/src/canvas/surface/render-loop.ts`, `packages/core/src/canvas/renderer/retained-backing.ts`, `renderer/tiles/{scheduler,planner,controller}.ts`, `editor/graph-events.ts` и text/resource caches на checkout `db794df33c27ce99e0bb0a22c7fb733ab72bcd38`.
+
+Перенесены только подходящие Pixi-архитектуре принципы:
+
+- асинхронные image/editing/resize invalidations запрашивают один общий rAF, без постоянного ticker и без debounce resize;
+- font signature вычисляется по `doc.nodes`, а не на каждом zoom-only React render;
+- `getPageDocument()` хранит projections в WeakMap по immutable document и `pageId`, поэтому EditorCanvas, Topbar, Inspector и LayersPanel не повторяют один обход;
+- `commit()` сразу выходит при возврате прежнего document, а `commit()`/`recordSnapshot()` заменяют double `JSON.stringify` на `isDocumentContentEqual()` со сравнением serializable values и reference short-circuiting. В реальном edit обычно достаточно различия `updatedAt`; одинаковая ссылка не обходится вообще. JSON semantics для `undefined` object properties сохранены.
+
+Tile scheduler, overscan root bitmap и CanvasKit paragraph/path caches не копировались. Первые два требуют иной модели покрытия, повторной растеризации и аккуратного mask/transform compositing; последние уже имеют аналоги в retained Pixi textures и Graphics. Ограниченные по весу кэши OpenPencil остаются полезным ориентиром, но без измеренной проблемы памяти не добавлены.
+
+В корректном SMZ-профиле после ожидания 2 328/2 149 слоёв double stringify 3 МБ документа занимал около 19–22 мс, а сравнение изменённого snapshot стало ниже разрешения таймера. Повторные projections после первого обращения не выполняют обход. Zoom-профиль остался в пределах 61–66 мс на wheel step с compositor preview. Полное сравнение одинаковых глубоких клонов не выдаётся за ускорение: это редкий путь, основной выигрыш относится к no-op по ссылке и реальным изменённым документам.
 
 ## 7. Presentation и Dev Mode
 
 Presentation технически загружала SVG, но на TCB.PAY открывала первый корневой фрейм «ТКБ / Элементы из кода» размером 1150×3890. Пользователь видел узкую длинную простыню вместо текущего экрана.
 
 Решение: выбирать фрейм-предка selection, затем экран с наибольшей видимой областью, и только потом первый root frame. В player добавлен переключатель экранов. Prototype остаётся frame-level, без заявления hotspot parity.
+
+После проверки второго реального макета data-URL заменён на inline SVG текущего экрана. Так Presentation не зависит от длины URI или повторной загрузки изображения и использует уже загруженные Manrope/Inter. Размер кадра вычисляется по stage через ResizeObserver, чтобы не было белых полос из-за двойного max-width/max-height. Глобальные editor shortcuts отключаются, пока открыт player: стрелки должны переключать экраны, а не двигать selection за оверлеем.
 
 Dev Mode генерирует CSS из реальной модели. Подсветка реализована без `dangerouslySetInnerHTML`: tokenizer возвращает типизированные токены, React рисует spans, а copy использует исходный CSS. Тест проверяет, что конкатенация токенов возвращает исходник без изменений.
 
@@ -144,11 +172,26 @@ Dev Mode генерирует CSS из реальной модели. Подсв
 - canvas selection раскрывает предков и делает scroll into view;
 - открытая библиотека не закрывается при selection;
 - темы меняют UI, но не цвета макета;
-- `Cmd/Ctrl+\\` скрывает боковые панели, toolbar сохраняется.
+- верхняя и нижняя панели убраны: project/panel/zoom controls находятся слева, undo/redo/presentation/theme — справа, а экспорт выделения находится в Inspector;
+- `Cmd/Ctrl+\\` скрывает боковые панели, tool rail и canvas hint, оставляя только canvas.
 
 При редизайне старые селекторы и привычные сценарии учитывались как регрессионный контур. Например, счётчик страниц получил отдельный класс от счётчика слоёв, а тест Auto Layout перешёл с checkbox на намеренно изменённую кнопку `+`.
 
-## 9. Несколько страниц и группы
+Скрытие панелей первоначально размонтировало Layers и Inspector, поэтому повторный показ заново создавал дерево и вычислял page projections. Теперь компоненты остаются смонтированными с `hidden`, строки Layers мемоизированы, а лишние object counts на каждой странице удалены. Изменение ширины canvas очищает WebGL drawing buffer, а Pixi `resizeTo` слушает только `window.resize`, поэтому ResizeObserver явно resize-ит основной и drag-renderers по размеру контейнера и затем рисует retained-сцену. В diagnostic SMZ-сценарии двойной rAF после показа сократился примерно с 350–430 до 260–270 мс на software WebGL; это не универсальный GPU benchmark.
+
+При оптимизации Layers выявился важный React-нюанс: сравнение только собственных props у memoized родителя блокирует получение новых `node`/`collapsed`/`renaming` потомками, даже если comparator самого потомка правильный. Полный browser suite поймал невидимое переименование текста и нераскрывающуюся ветку TCB.PAY. Итоговый comparator рекурсивно сравнивает display-свойства и child IDs поддерева, а изменения collapsed/renaming контекста намеренно пропускает вниз. Transform-only X/Y по-прежнему не перерисовывает строки; точность потомков не приносится в жертву мемоизации.
+
+Inspector приведён к компактной Figma-схеме «Дизайн / Прототип» без постоянных bottom actions. Правый клик поддерживается не только на canvas, но и в слоях/страницах; modified secondary click открывает собственное меню, а Cmd/Ctrl+primary click сохраняет deep-select и не создаёт блокирующий overlay. Меню закрываются по Escape в capture-фазе до глобального сброса selection.
+
+Объектное меню расширено рабочими командами вместо неактивных копий Figma: paste to replace, SVG/CSS copy, страницы, z-order, группы/фреймы, flatten/outline для фигур, Prototype, components и flip. Object group — прозрачный frame с `isGroup`, поэтому renderer, export и Auto Layout используют существующую иерархию без отдельного node type. Flip хранится в модели и входит в общую affine matrix/Pixi scale, поэтому hit-test и export не расходятся с artwork. Полные mask compositing, плагины и виджеты остаются явно обозначенными ограничениями.
+
+Экспорт убран из глобальных controls и перенесён в нижнюю секцию Inspector для selection. PNG получает выбор 1–3×, SVG остаётся векторным, preview строится из той же `documentToSvg` модели, а имя файла берётся от слоя. JSON копия проекта остаётся отдельной командой меню проекта.
+
+После реального использования убран повторяющийся заголовок «Слои»: один верхний ряд «Слои / Библиотека» предшествует страницам и дереву. Панели и Inspector подавляют системное context menu; для выделенного объекта Inspector переиспользует меню слоя. Native menu в текстовых полях намеренно сохранено для редактирования.
+
+Финальная компоновка убрала отдельные Topbar и bottom status bar, а не стала прятать их визуально: `ProjectControls` и `ZoomControls` принадлежат левой панели, `ActionControls` с history/presentation/theme — правой. Это сохраняет команды без выделения им отдельных полос. В canvas-only режиме скрываются также tool rail и hint; общие viewport helpers не дают Fit/Zoom разойтись между командами. Регрессия сравнивает CSS/bitmap-размеры, точные red pixels и hit-target центра до скрытия и после восстановления, а при полном viewport 1440×960 дополнительно проверяет blue object в новооткрытой правой области, поэтому исправление не сводится к проверке отсутствия DOM-панелей.
+
+## 9. Несколько страниц
 
 Первоначальная подпись «Страница 1» не была моделью. Для настоящей поддержки выбрана схема с `pageId` только у корневых узлов.
 
@@ -168,10 +211,15 @@ Descendants уже связаны с корнем через `parentId`. Дуб�
 - Новые корни получают активную страницу через store pipeline.
 - Переключение очищает selection.
 - Страницы можно создавать, переименовывать, дублировать и удалять.
-- Группы — отдельная metadata. Их удаление не удаляет страницы.
+- Группы остаются legacy metadata для старых JSON. После реального использования UI намеренно упрощён до плоского списка с drag ordering и context menu; создание новых групп не предлагается.
 - Figma pages получают собственные IDs и имена при импорте.
+- У каждой страницы есть независимый `background`; имя и цвет доступны в Inspector без selection.
 
-Особенно важный регрессионный случай: две страницы могут содержать фреймы в одинаковых координатах. Hit-test, marquee, snap и parent search не должны видеть скрытую страницу.
+Особенно важный регрессионный случай: две страницы могут содержать фреймы в одинаковых координатах. Hit-test, marquee, snap и parent search не должны видеть скрытую страницу. Поэтому importer больше не раскладывает страницы горизонтально: каждая сохраняет исходный coordinate space, а `EditorCanvas` делает fit при смене `activePageId`. На `TCB.PAY.SMZ.fig` это проверено для 2 328 слоёв «Справок» и 2 149 слоёв «Уведомлений».
+
+Профиль переключения SMZ показал 0,9–1,1 с даже при возврате на уже открытую страницу: заново создавались Graphics и текстуры, а reset viewport, fit и visibility вызывали несколько полных renders. Теперь посещённые страницы имеют собственные retained worlds, которые очищаются при смене документа; fit выполняется в layout effect до renderer passive effects, а неизменённый viewport повторно не рисуется. Диагностическое время снизилось примерно до 0,55–0,75 с на software WebGL. Это по-прежнему on-demand renderer без RenderTexture-кэша и ticker; полный документ всех страниц в store не затрагивается.
+
+Даже с retained worlds синхронный `setActivePage()` в click handler запускал проекцию и WebGL-работу до того, как браузер показывал активную строку. `PagesPanel` теперь сначала коммитит локальный `pendingPageId`, а полноценное переключение откладывает на два `requestAnimationFrame`. Повторный клик отменяет незавершённые frames, поэтому старое переключение не перекрывает новое. `aria-current="page"` следует за той же displayed selection. Browser regression на SMZ отдельно фиксирует момент, когда destination row уже активна, а `data-scene-page` ещё указывает предыдущую страницу; blur по-прежнему даёт обратную связь во время показа тяжёлого содержимого.
 
 ## 10. Правила для будущих решений
 
@@ -213,5 +261,7 @@ Descendants уже связаны с корнем через `parentId`. Дуб�
 - TCB.PAY import/reload и non-blank canvas;
 - nested move pixel equality;
 - страницы, группы, Presentation, themes, selection scroll и CSS highlighting.
+
+Текущий проверенный контур: **84 unit-теста**, **53 browser-сценария** и production TypeScript/Vite build. Дополнительно он включает deferred root commit и live frame labels, invariance instances при main translation, nested Layers display updates, object operations/export, text tiling на 6400% и canvas-only pixel/hit-target alignment в старой и новооткрытой области.
 
 Количество тестов должно расти вместе с функциональностью. Обновляйте README, CHANGELOG, UX_AUDIT и эту историю только фактически проверенными сведениями.

@@ -87,16 +87,23 @@ test('Light and Dark modes update bound colors', async ({ page }) => {
 test('prototype follows a link and returns through history', async ({ page }) => {
   await seed(page, [frame('a', 'Screen A', 0, 300, 200), frame('b', 'Screen B', 500, 300, 200)]);
   await layer(page, 'Screen A').click();
+  await page.getByRole('tab', { name: 'Прототип' }).click();
   await page.getByLabel('Цель перехода').selectOption({ label: 'Screen B' });
   await page.getByRole('button', { name: 'Презентация' }).click();
   await expect(page.getByRole('dialog', { name: 'Предпросмотр прототипа' })).toBeVisible();
-  await expect(page.locator('.prototype-frame')).toHaveAttribute('alt', 'Screen A');
+  await expect(page.locator('.prototype-frame')).toHaveAttribute('aria-label', 'Screen A');
+  await page.keyboard.press('ArrowRight');
+  await expect(page.locator('.prototype-frame')).toHaveAttribute('aria-label', 'Screen B');
+  await page.keyboard.press('ArrowLeft');
+  await expect(page.locator('.prototype-frame')).toHaveAttribute('aria-label', 'Screen A');
   await page.getByRole('button', { name: 'Дальше' }).click();
-  await expect(page.locator('.prototype-frame')).toHaveAttribute('alt', 'Screen B');
+  await expect(page.locator('.prototype-frame')).toHaveAttribute('aria-label', 'Screen B');
   await page.getByRole('button', { name: 'Назад' }).click();
-  await expect(page.locator('.prototype-frame')).toHaveAttribute('alt', 'Screen A');
+  await expect(page.locator('.prototype-frame')).toHaveAttribute('aria-label', 'Screen A');
   await page.getByRole('button', { name: 'Закрыть предпросмотр' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('tab', { name: 'Дизайн' }).click();
+  await expect(page.locator('label.number-field').filter({ hasText: /^X/ }).locator('input')).toHaveValue('0');
 });
 
 test('Dev Mode displays generated CSS and tokens', async ({ page }) => {

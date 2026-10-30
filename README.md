@@ -41,29 +41,32 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 
 - Бинарный `fig-kiwi` декодируется через `@open-pencil/fig`; не требуется Figma API или доступ к облаку.
 - Фреймы, группы, компоненты, instances, текст, фигуры и векторы преобразуются в отдельные редактируемые слои, а не в плоский screenshot.
-- Сохраняются иерархия, абсолютная геометрия, solid fill/stroke, inside stroke, SVG contours с fill-rule, Auto Layout, Fixed/Hug/Fill, component links/overrides, переменные, коллекции, modes и bindings. Уже развёрнутый Figma `strokeGeometry` заливается цветом обводки без повторного stroke.
-- Manrope поставляется локально через `@fontsource/manrope`, поэтому импортированная типографика не зависит от системных шрифтов.
+- Сохраняются иерархия, абсолютная геометрия, solid fill/stroke, inside stroke, SVG contours с fill-rule, Auto Layout, Fixed/Hug/Fill, component links/overrides, переменные, коллекции, modes и bindings. Уже развёрнутый Figma `strokeGeometry` заливается цветом обводки без повторного stroke. Если derived geometry отсутствует, редактируемый `vectorNetwork` преобразуется в SVG-path вместо прямоугольной заглушки; mask-контуры сохраняются как metadata и не рисуются как обычная чёрная заливка. WebGL-рендер строит outer+hole contours по фактическому winding, поэтому внутренние вырезы `nonzero`-векторов (включая букву «б» логотипа ТКБ) не заливаются; это работает и для ранее сохранённых path.
+- Manrope поставляется локально через `@fontsource/manrope`, поэтому импортированная типографика не зависит от системных шрифтов. Разрешение текстовых текстур учитывает zoom и device pixel ratio; после жеста пересчитываются только видимые текстовые объекты. Длинные строки автоматически разбиваются на retained-фрагменты с учётом лимита текстур GPU, поэтому текст остаётся резким и на 6400% вместо растягивания растра с прежним ограничением 8×.
 - При открытии сохранённая геометрия не пересчитывается глобально. Последующий edit пересчитывает Auto Layout только в изменённой ветке и связанных instances.
-- Видимые Figma-страницы становятся отдельными страницами Malewich с собственными корневыми слоями и именами. Internal Only Canvas не импортируется.
+- Видимые Figma-страницы становятся отдельными страницами Malewich с собственными корневыми слоями и именами. Internal Only Canvas не импортируется. Координаты каждой страницы сохраняются независимо, без искусственного горизонтального сдвига; при переключении содержимое вписывается в viewport.
 
-Проверка на реальном `TCB.PAY.fig`: **2 325 слоёв**, включая **599 текстов**, **671 редактируемый vector**, **691 Auto Layout-контейнер**, **26 main components**, **176 instances**, **122 переменные** и **6 коллекций**. Browser-тест проверяет отображение, component inspector и сохранение после reload.
+Проверка на реальном `TCB.PAY.fig`: **2 325 слоёв**, включая **599 текстов**, **671 редактируемый vector**, **691 Auto Layout-контейнер**, **26 main components**, **176 instances**, **122 переменные** и **6 коллекций**. Browser-тест проверяет отображение, component inspector и сохранение после reload. Отдельный регрессионный `TCB.PAY.SMZ.fig` содержит **4 477 импортированных слоёв на двух страницах** (2 328 + 2 149); тест переключается на «Уведомления», проверяет non-blank canvas, bell curves, скрытие mask-контура логотипа и Presentation экрана «00. Первая проверка».
 
 Текущий converter рассчитан на solid paints. Gradient/image fills, маски, effects, смешанные text runs и полноценные Variant sets из произвольных файлов остаются следующим этапом; в проверенном TCB.PAY они не используются. Это не заявление о полной визуальной совместимости со всеми Figma-файлами.
 
+Улучшения decoder применяются при импорте. Если проект был сохранён со старыми rectangle fallback и без mask metadata, откройте исходный `.fig` ещё раз: утраченные исходные кривые невозможно надёжно восстановить из старого JSON. Перед заменой документа с нужными правками экспортируйте резервный JSON.
+
 ## Возможности
 
-- несколько независимых страниц: создание, переключение, переименование, дублирование и удаление;
-- группы страниц с переименованием, сворачиванием и drag-and-drop страниц между группами;
+- несколько независимых страниц в плоском списке: создание, мгновенная подсветка выбранной строки до загрузки новой WebGL-сцены, лёгкий blur-transition примерно на 240 мс после её показа, переименование, дублирование, удаление и drag-and-drop порядок; старые группы остаются совместимой metadata, но не перегружают интерфейс; эффект отключается при `prefers-reduced-motion`;
+- собственный цвет фона каждой страницы и её имя в инспекторе при снятом выделении;
 - Figma-like обозначения Frame, направления Auto Layout, Main Component и Instance в слоях и инспекторе;
 - синхронизация выделения с деревом слоёв: раскрытие предков и автоматический scroll into view;
-- светлая и тёмная темы интерфейса, скрытие боковых панелей по `⌘\` / `Ctrl+\`;
+- рабочее пространство без верхней и нижней панелей: фирменный знак, проект, импорт, сохранение, переключатель UI и zoom находятся слева, Undo/Redo, Presentation и тема — справа; в строке состояния остаются только счётчик объектов и подписанный масштаб; `⌘\` / `Ctrl+\` скрывает боковые панели, tool rail и подсказку, оставляя только canvas; светлая и тёмная темы адаптируют логотип, favicon и `theme-color`;
 - фреймы с вложенными объектами и обрезкой содержимого;
 - Auto Layout: direction, gap, padding, alignment, justify, Hug/Fixed/Fill по осям, min/max и Absolute position;
 - компоненты с instances, синхронизацией, overrides, reset, detach и Variants;
 - цветовые и текстовые стили с обновлением связанных объектов;
 - цветовые и числовые переменные, коллекции, Light/Dark modes и aliases;
 - библиотека с поиском и drag-and-drop компонентов на холст;
-- Prototype-переходы с интерактивным предпросмотром и историей;
+- Prototype-переходы с интерактивным предпросмотром и историей; Presentation рисует выбранный экран непосредственным SVG с загруженными шрифтами, а клавиши плеера не изменяют документ за оверлеем;
+- компактный Figma-like Inspector с режимами «Дизайн / Прототип», позицией, выравниванием, Auto Layout, внешним видом и отдельными paint-секциями;
 - Dev Mode с генерацией CSS, токенами и подсветкой синтаксиса;
 - прямоугольники, эллипсы, текст, локальные изображения и SVG vector layers;
 - иерархическое и marquee-выделение, deep-select и множественный выбор;
@@ -71,13 +74,13 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 - групповые resize/rotate, выравнивание и распределение объектов;
 - редактирование текста по double-click с одной рамкой поля, auto-width, auto-height и fixed-size;
 - заливка, обводка, непрозрачность, скругление и настройки типографики;
-- скрытие, блокировка, переименование и drag-and-drop слоёв;
+- скрытие, блокировка, переименование и drag-and-drop слоёв; контекстное меню также группирует объекты и оборачивает их во фрейм, переносит между страницами, меняет порядок, отражает, преобразует фигуры в вектор и обводит их stroke, копирует SVG/CSS, вставляет с заменой и создаёт Prototype-переходы;
 - перенос объектов между фреймами с сохранением координат;
 - Undo/Redo, дублирование, Alt-drag и внутренний copy/cut/paste;
-- перемещение стрелками, zoom, pan, fit-to-screen и fit-to-selection;
+- перемещение стрелками, плавный compositor zoom в диапазоне 5–25 600%, pan, fit-to-screen и fit-to-selection;
 - автосохранение в IndexedDB, новый проект, импорт `.fig` и импорт/экспорт JSON;
-- контекстное меню по правому клику на холсте и объектах;
-- экспорт выбранного объекта или всего макета в PNG и SVG.
+- собственные контекстные меню на холсте, слоях, страницах и для выделения в Inspector, без системного меню на панелях; Mac Control-click и закрытие по `Escape`;
+- экспорт выделения из нижней секции Inspector: PNG/SVG, масштаб 1–3× для PNG, предпросмотр и имя файла по имени слоя; резервная копия всего проекта JSON остаётся в меню проекта, глобальной кнопки экспорта макета больше нет.
 
 ## Хранение и переименование Forma → Malewich
 
@@ -93,6 +96,8 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 | Отменить / повторить | `⌘Z` / `⇧⌘Z` |
 | Дублировать / дублировать перетаскиванием | `⌘D` / `Alt+drag` |
 | Копировать / вырезать / вставить | `⌘C` / `⌘X` / `⌘V` |
+| Сгруппировать / обернуть во фрейм | `⌘G` / `⇧⌘G` |
+| Вставить с заменой | `⇧⌘R` |
 | Переместить на 1 px / 10 px | `стрелки` / `Shift+стрелки` |
 | Удалить | `Delete` или `Backspace` |
 | Временно включить руку | удерживать `Space` |
@@ -109,29 +114,33 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 - `src/store/editorStore.ts` — состояние, команды, история и определение changed layout scope;
 - `src/utils/figmaImport.ts` — decoder boundary и преобразование Figma SceneGraph в документ Malewich;
 - `src/utils/document.ts` — операции с иерархией объектов;
-- `src/utils/pages.ts` и `src/components/PagesPanel.tsx` — страницы, группы и производный документ активной страницы;
+- `src/utils/pages.ts` и `src/components/PagesPanel.tsx` — плоский список страниц, фон и производный документ активной страницы; legacy group metadata остаётся в модели для совместимости;
 - `src/utils/geometry.ts` — аффинные преобразования;
 - `src/utils/groupTransform.ts` — групповые трансформации и выравнивание;
+- `src/utils/nodeOperations.ts` — группировка, перенос между страницами, порядок, flatten, outline stroke и отражение объектов;
 - `src/utils/autoLayout.ts` — итеративный layout с Hug/Fixed/Fill, constraints и scoped reflow;
 - `src/utils/components.ts` — main/instance reconciliation, overrides и Variants;
 - `src/utils/library.ts` — стили, переменные, коллекции, modes и aliases;
 - `src/utils/devMode.ts` — генерация CSS и токенов;
 - `src/utils/text.ts` — единый text layout для холста и экспорта;
 - `src/components/EditorCanvas.tsx` — инструменты и pointer-взаимодействия;
-- `src/components/PixiScene.tsx` — retained WebGL-сцена, incremental updates и on-demand rendering;
+- `src/components/PixiScene.tsx` — retained WebGL-сцена, incremental updates, compositor zoom и on-demand rendering;
+- `src/utils/rendering.ts` — пределы zoom, разрешение текстовых текстур и преобразование nonzero/evenodd vector contours в Pixi outer+hole groups;
 - `src/components/SceneNode.tsx` — SVG-рендерер для диагностического fallback и экспорта;
 - `src/components/HitLayer.tsx` — прозрачные SVG hit targets, включаемые только для тестов;
 - `src/utils/export.ts` — SVG/PNG/JSON;
 - `src/utils/storage.ts` — IndexedDB, localStorage fallback и миграция Forma;
 - `e2e/figmaImport.spec.ts` и `src/utils/figmaImport.test.ts` — регрессии на настоящем TCB.PAY.
 
-Основной холст использует **PixiJS 8 / WebGL**. Для каждого слоя сохраняется display object: чистое перемещение сдвигает retained visuals и нормализует transforms без пересоздания текстур или двойного сдвига вложенных абсолютных координат; изменение геометрии и стиля пересоздаёт только затронутый visual. Рендер выполняется по требованию через `app.render()`, без постоянного ticker. При pan рукой готовый canvas временно двигается композитором через `translate3d()`, а окончательный WebGL-кадр рисуется один раз при отпускании.
+Основной холст использует **PixiJS 8 / WebGL**. Для каждого слоя сохраняется display object: чистое перемещение сдвигает retained visuals и нормализует transforms без пересоздания текстур или двойного сдвига вложенных абсолютных координат; изменение геометрии и стиля пересоздаёт только затронутый visual. Векторные fill contours группируются по winding и вложенности, чтобы Pixi вырезал внутренние отверстия независимо от их порядка в исходном path; сами path остаются редактируемыми. Рендер выполняется по требованию через `app.render()`, без постоянного ticker. Асинхронные image/editing/resize invalidations объединяются в один `requestAnimationFrame`. При zoom готовый canvas сразу масштабируется композитором, а после 90 мс паузы выполняется один финальный WebGL-кадр с пересчётом разрешения только видимых текстов. Если целая текстовая текстура превысила бы лимит GPU, строка делится на retained-фрагменты; разрешение повышается лишь у их видимой части, а не у всех слоёв документа. При pan рукой canvas временно двигается через `translate3d()`, а окончательный кадр рисуется один раз при отпускании.
 
-При перемещении корневого фрейма его существующее Pixi-поддерево на время жеста переносится в отдельный прозрачный canvas и двигается композитором. Промежуточные pointer steps не растрируют сцену; при отпускании поддерево возвращается в основную сцену и рендерится окончательный кадр. RenderTexture-кэш корня не используется. Для вложенных фреймов сохраняется обычный WebGL-путь, чтобы не потерять clipping и transforms предков.
+При простом перемещении корневого фрейма `state.doc` остаётся неизменным до отпускания указателя. Существующее Pixi-поддерево на время жеста переносится в отдельный прозрачный canvas; `deferredMoveDelta` двигает его, selection overlay и подпись корневого фрейма через общий transform. Промежуточные pointer steps не растрируют сцену, не создают snapshots и не запускают derived document pipeline; при отпускании выполняются один document commit/history entry и финальный WebGL-кадр. RenderTexture-кэш корня не используется. Вложенные фреймы, reparenting и Auto Layout сохраняют обычный безопасный путь с учётом clipping и transforms предков.
 
-Горячие обходы документа используют `WeakMap`-индексы узлов, детей и descendants. Snap bounds вычисляются один раз на начало drag. Если перемещение сохраняет всю parent-relative геометрию и не затрагивает main components, preview не запускает повторно variables, component reconciliation и Auto Layout; обычный commit и вложенный Auto Layout сохраняют полный pipeline. В самом Auto Layout повторные `filter/find` по всему документу заменены индексами текущего pass.
+Горячие обходы документа используют `WeakMap`-индексы узлов, детей и descendants. Snap bounds вычисляются один раз на начало drag. Если перемещение сохраняет всю parent-relative геометрию, preview не запускает повторно variables и Auto Layout; чистый X/Y translation main component также не запускает component reconciliation и не меняет identities/геометрию instances. Обычные content-изменения и вложенный Auto Layout сохраняют полный pipeline. Строки Layers мемоизируют только display-relevant свойства и child IDs, поэтому transient X/Y не перерисовывают всё дерево. В самом Auto Layout повторные `filter/find` по всему документу заменены индексами текущего pass. History сравнивает serializable content с ранним выходом по ссылкам и `updatedAt`, не сериализуя весь документ дважды на каждый snapshot.
 
 SVG остаётся для selection handles, подписей фреймов, текстового редактора и экспорта. `?renderer=svg` включает полный SVG fallback для визуальной диагностики, `?hitLayer=1` добавляет прозрачные hit targets для legacy browser-тестов. В production hit-test выполняется по геометрии документа, без DOM-элемента на каждый слой. Figma decoder загружается как отдельный lazy chunk только при импорте `.fig`.
+
+При `Cmd/Ctrl+\\` боковые панели, tool rail и canvas-подсказка скрываются без размонтирования, оставляя только рабочую область; строки дерева мемоизированы. `ResizeObserver` после изменения ширины холста явно меняет размер основного и drag-renderers (Pixi `resizeTo` сам наблюдает только `window.resize`) и восстанавливает очищенный drawing buffer из retained-сцены. Pixel-регрессия проверяет CSS/bitmap-размеры, старое содержимое и объект в новооткрытой правой области до скрытия, в canvas-only режиме и после восстановления панелей. Посещённые страницы сохраняют собственные retained Pixi-сцены, поэтому возврат не пересоздаёт Graphics и текстовые текстуры; при смене документа такие сцены освобождаются. Проекция активной страницы дополнительно разделяется компонентами через WeakMap. Выбор страницы сначала показывает локальную подсветку строки и только затем запускает смену сцены. Fit новой страницы происходит до passive renderer effects, а повторный render неизменённого viewport пропускается. Presentation использует отдельный inline SVG только для текущего экрана и не запускает основной WebGL renderer повторно.
 
 ### Замер TCB.PAY
 
@@ -153,12 +162,16 @@ Headless Chromium, viewport 1440×960, 2 325 слоёв; сравнение с
 
 Общее время frame drag включает обязательную отрисовку статичной сцены и moving preview при старте, а также финальный WebGL-кадр. Между ними используется композитор; в проверенном жесте transform preview равен `translate3d(80px, 30px, 0px)`.
 
-Это диагностические замеры в headless Chromium с software WebGL, а не обещание одинакового времени на любом GPU. `data-render-ms` на `.pixi-scene` измеряет только вызов `app.render()` и не включает всю нативную растеризацию. Browser-тест также проверяет реальные non-blank pixels canvas, compositor transform и совпадение финального nested move с полным rebuild после reload.
+Для реального корневого фрейма `ТКБ/Уведомления/Боковая навигация` в SMZ (232×1000, 52 descendants) отдельный 12-step профиль сократился примерно с **10,5 до 1,88–1,94 с**: чистый translation main component больше не синхронизирует instances, дерево слоёв не реагирует на transient X/Y, а корневой drag откладывает document commit до release. Основная оставшаяся стоимость профиля — запуск и финальная растеризация native/software WebGL, поэтому промежуточная отзывчивость и полное время жеста нужно различать.
+
+На двухстраничном SMZ (4 477 слоёв) повторное переключение страниц в том же диагностическом режиме сократилось примерно с **0,9–1,1 до 0,55–0,75 с** после retained page scenes и удаления повторных renders. В профиле из восьми wheel steps после перехода на compositor zoom каждый шаг вместе с ожиданием двух `requestAnimationFrame` занял **60–66 мс** и сохранил активный preview; прежний вариант с полным рендером занимал примерно 347–1681 мс на шаг. В том же документе двойная JSON-сериализация 3 МБ модели занимала **19–22 мс**; после замены history comparison реальный изменённый snapshot завершается по `updatedAt` без обхода узлов.
+
+Это диагностические замеры в headless Chromium с software WebGL, а не обещание одинакового времени на любом GPU. `data-render-ms` на `.pixi-scene` измеряет только вызов `app.render()` и не включает всю нативную растеризацию. Browser-тест также проверяет реальные non-blank pixels canvas, compositor transform, точный центральный pixel на 25 600% и совпадение финального nested move с полным rebuild после reload.
 
 ### Приёмы из OpenPencil
 
-Изучен [OpenPencil](https://github.com/open-pencil/open-pencil), прежде всего его CanvasKit renderer, node preview и разделение `renderVersion`/`sceneVersion`. В Malewich перенесены принципы дешёвого transient preview, отложенного commit и раздельной инвалидации геометрии и полной сцены. Сам renderer остаётся на PixiJS: CanvasKit/Skia WASM, WebGPU и Yoga WASM не добавлялись, а tile scheduler OpenPencil не копировался без соответствующей tile-архитектуры.
+Повторно изучен [OpenPencil](https://github.com/open-pencil/open-pencil) на revision `db794df33c27ce99e0bb0a22c7fb733ab72bcd38`: CanvasKit renderer, node preview, разделение `renderVersion`/`sceneVersion`, [rAF render loop](https://github.com/open-pencil/open-pencil/blob/db794df33c27ce99e0bb0a22c7fb733ab72bcd38/packages/vue/src/canvas/surface/render-loop.ts), retained backing, tile scheduler и resource caches. В Malewich перенесены дешёвый transient preview, отложенный commit, раздельная инвалидация, коалесцирование асинхронных renders, weak memoization и ранний выход из неизменённой работы. Сам renderer остаётся на PixiJS: CanvasKit/Skia WASM, WebGPU, Yoga WASM, tile scheduler и повторный root bitmap-кэш не добавлялись без соответствующей архитектуры и измеренной необходимости.
 
 ## Ограничения
 
-Проект однопользовательский и хранится только в текущем браузере. Основное хранилище — IndexedDB; если браузер блокирует его, используется `localStorage` с его квотой. Перед очисткой данных браузера экспортируйте резервную копию JSON. Hotspots, production code export, облачная библиотека, совместная работа и редактирование отдельных узлов векторного контура относятся к следующим этапам.
+Проект однопользовательский и хранится только в текущем браузере. Основное хранилище — IndexedDB; если браузер блокирует его, используется `localStorage` с его квотой. Перед очисткой данных браузера экспортируйте резервную копию JSON. Hotspots, production code export, облачная библиотека, совместная работа, плагины/виджеты Figma, полное mask compositing и редактирование отдельных узлов векторного контура относятся к следующим этапам. Flatten и outline stroke в объектном меню работают для rectangle/ellipse, а не для произвольного текста или целого макета.

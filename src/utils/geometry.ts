@@ -52,7 +52,18 @@ export function matrixToString(matrix: Matrix): string {
 }
 
 export function nodeMatrix(node: EditorNode): Matrix {
-  return rotationMatrix(node.rotation, node.x + node.width / 2, node.y + node.height / 2);
+  const centerX = node.x + node.width / 2;
+  const centerY = node.y + node.height / 2;
+  const rotation = rotationMatrix(node.rotation, centerX, centerY);
+  if (!node.flipX && !node.flipY) return rotation;
+  return multiplyMatrix(rotation, {
+    a: node.flipX ? -1 : 1,
+    b: 0,
+    c: 0,
+    d: node.flipY ? -1 : 1,
+    e: node.flipX ? centerX * 2 : 0,
+    f: node.flipY ? centerY * 2 : 0,
+  });
 }
 
 export function nodeCorners(node: EditorNode): Point[] {

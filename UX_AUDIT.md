@@ -81,7 +81,7 @@
 | Типографика | Manrope 400/500/600/700 поставляется локально | `document.fonts.check` в Chromium |
 | Хранение | Текущие ключи Malewich, миграция Forma localStorage/IndexedDB, поддержка старых `.forma.json` | Legacy migration test и большой IndexedDB test |
 
-Подтверждённый fixture содержит 2 325 видимых слоёв, 26 main components и 176 instances. Общий importer пока покрывает solid paints; gradients, image fills, effects и смешанные text runs не заявлены как полностью поддержанные.
+Подтверждённый fixture содержит 2 325 видимых слоёв, 26 main components и 176 instances. Второй fixture `TCB.PAY.SMZ.fig` добавляет 4 477 импортированных слоёв: 2 328 на «Справках» и 2 149 на «Уведомлениях»; browser-тест проверяет обе координатные области, непустой canvas второй страницы и Presentation её экрана. Общий importer пока покрывает solid paints; gradients, image fills, effects и смешанные text runs не заявлены как полностью поддержанные.
 
 ## Этап 6 «WebGL и отзывчивость большого макета» — реализован
 
@@ -89,29 +89,46 @@
 | --- | --- | --- |
 | Retained WebGL | PixiJS хранит display objects по ID, обновляет изменённые слои и рисует только по требованию; постоянный ticker не используется | Pixel-level leaf drag и сравнение nested move с полным rebuild |
 | Быстрый pan | Во время hand-drag canvas двигается через `translate3d()`, финальный WebGL-кадр выполняется при отпускании | Специальный compositor-pan сценарий |
-| Быстрый frame drag | Корневой фрейм на время жеста сохраняет существующее Pixi-поддерево в отдельном canvas и двигается композитором без RenderTexture; финальный кадр возвращается в основную сцену | Transform assertion и pixel comparison с rebuild после reload |
-| Горячие обходы | `WeakMap`-индексы документа, snap bounds один раз на жест, Auto Layout без полных `filter/find`, derived pipeline пропускается только для безопасного parent-relative translation | Unit-тесты store/layout/document и весь TCB.PAY browser path |
+| Быстрый frame drag | При простом перемещении корня документ остаётся immutable до release; существующее Pixi-поддерево и selection двигаются общим compositor delta без RenderTexture и промежуточных history entries; на release выполняются один commit и финальный кадр. Nested/Auto Layout/reparenting сохраняют безопасный document path | Inspector X остаётся прежним до release, transform assertion и pixel comparison с rebuild после reload |
+| Горячие обходы | `WeakMap`-индексы документа и общих page projections, snap bounds один раз на жест, Auto Layout без полных `filter/find`, derived pipeline пропускается только для безопасного parent-relative translation | Unit-тесты store/layout/document и весь TCB.PAY browser path |
+| Планирование и history | Image/editing/resize invalidations коалесцируются в один rAF без постоянного ticker; font signature мемоизирована; history использует структурное сравнение с reference/`updatedAt` short-circuit вместо double stringify | Unit-регрессии no-op/changed snapshots, SMZ-профиль, полный browser suite |
 | DOM и hit-test | Полная SVG-разметка слоёв заменена JS geometry hit-test; SVG hit layer подключается только через `?hitLayer=1` | 1 196 DOM-элементов вместо 54 126 на TCB.PAY |
-| Типографика | FontFaceSet загружает Manrope до генерации Pixi text textures; baseline и padding не обрезают строки | Font assertions и screenshot TCB.PAY |
-| Векторы | SVG paint attributes сохраняются в Pixi; expanded `strokeGeometry` не обводится повторно | Model assertion и визуальная сверка иконок/логотипа |
+| Типографика | FontFaceSet загружает Manrope до генерации Pixi text textures; baseline и padding не обрезают строки; разрешение синхронизируется с zoom/DPR, поэтому 400% не растягивает старую текстуру | Font assertions, разрешение 1×→4× в browser-сценарии и Retina screenshot TCB.PAY |
+| Быстрый и крайний zoom | Диапазон 5–25 600%; жест сразу масштабирует готовый canvas композитором, а после 90 мс паузы выполняется финальный WebGL render и перерисовка только видимого текста | Compositor-preview и точная проверка центрального pixel на 25 600% и после возврата к 100%; отдельная pixel-диагностика реального текста TCB.PAY |
+| Векторы | Solid paints передаются прямо в Pixi Graphics; expanded `strokeGeometry` не обводится повторно; nonzero/evenodd contours группируются по winding и вложенности, включая holes перед outer path | Model assertion на реальном логотипе ТКБ, pixel assertion прозрачного hole и визуальная сверка иконок/логотипа |
 | Изображения | HTMLImageElement создаёт texture после загрузки и запрашивает on-demand render; битый data URL не роняет React | IndexedDB сценарий с payload больше 9 МБ |
 | Не-пустой кадр | Browser-тест проверяет размер PNG реального canvas, а не только число слоёв | Non-blank regression в `figmaImport.spec.ts` |
 | Fallback | `?renderer=svg` сохраняет эталонный рендерер для сравнения и диагностики | Ручная side-by-side сверка TCB.PAY |
 
 На TCB.PAY при 50% zoom выбор фрейма занял 100 мс вместо 817 мс, 12-step pan — 642 мс вместо 2 625 мс. При 100% zoom реальный 12-step drag корневого фрейма в одинаковом диагностическом `?hitLayer=1` режиме сократился с 18 039 до 2 729 мс; обычный путь без hit layer — 2 341 мс, drag корневого текста — 538 мс. Общее frame-drag время включает начальный и финальный WebGL-кадры, промежуточные шаги выполняются композитором. Это результаты headless Chromium с software WebGL; вызов `app.render()` не включает всю нативную растеризацию.
 
+Отдельный профиль `ТКБ/Уведомления/Боковая навигация` (SMZ, 232×1000, 52 descendants) сократился примерно с 10,5 до 1,88–1,94 с для 12 pointer steps. Дополнительно устранены component reconciliation для чистого main translation, React-обновления дерева от X/Y и промежуточные document commits корневого drag. Это не означает устранение всей rendering latency: startup и финальный software-WebGL кадр остаются основной стоимостью замера.
+
 ## Этап 7 «Интерфейс, страницы и рабочее пространство» — реализован
 
 | Область | Реализованное поведение | Проверка |
 | --- | --- | --- |
-| Страницы | Независимые иерархии с `pageId` у корней; создание, переключение, rename, duplicate и delete; старые документы остаются на «Странице 1» | Store-тесты и изоляция страниц в `interface.spec.ts` |
-| Группы страниц | Создание, rename, collapse, drag-and-drop страниц; удаление группы не удаляет страницы | Browser-сценарий групп |
+| Страницы | Независимые иерархии с `pageId` у корней; создание, переключение с blur-transition примерно на 240 мс после реального кадра и поддержкой reduced motion, rename, duplicate и delete; старые документы остаются на «Странице 1» | Store-тесты, изоляция страниц и MutationObserver-проверка blur на тяжёлой SMZ |
+| Плоский список страниц | Без группировки и лишних счётчиков; выбранная строка подсвечивается до загрузки новой сцены, быстрые клики отменяют устаревшее переключение; drag ordering, rename, duplicate/delete и page context menu; legacy groups не удаляют страницы | Store-тесты, browser-сценарий порядка/меню и MutationObserver-проверка подсветки до `data-scene-page` на SMZ |
+| Фон страницы | Независимый `PageDefinition.background`, редактирование HEX/color picker без selection, сохранение и восстановление после reload | Store undo и browser-сценарий двух страниц |
 | Типы слоёв | Frame, horizontal/vertical Auto Layout, Main Component и Instance различаются иконками, цветом и inspector badges | Browser-сценарий component/Auto Layout identity |
 | Selection → Layers | Предки выбранного слоя раскрываются, строка подсвечивается и прокручивается в видимую область; открытая библиотека не закрывается | Глубоко вложенный 26-уровневый сценарий |
-| Presentation | Старт из фрейма-предка выделения или наиболее видимого экрана, переключатель экранов, история и клавиатура | Сценарий выбранного Screen B и существующий Prototype suite |
+| Presentation | Старт из фрейма-предка выделения или наиболее видимого экрана, inline SVG с загруженными шрифтами, точный aspect ratio, переключатель экранов, история и изолированная клавиатура | Сценарии Screen B, Prototype и SMZ screenshot |
 | Dev Mode | Безопасная React-подсветка CSS properties, selectors, variables, colors, numbers и comments; copy отдаёт исходный CSS | Token unit test и browser assertions |
-| Тема и панели | Сохраняемая светлая/тёмная тема интерфейса; `Cmd/Ctrl+\\` скрывает обе боковые панели без скрытия toolbar | Browser-сценарий темы и panels |
-| Figma pages | Видимые страницы и их имена сохраняются при импорте, корни получают соответствующий `pageId` | Assertions на реальном TCB.PAY |
+| Тема и панели | Сохраняемая светлая/тёмная тема интерфейса; фирменный знак, favicon и `theme-color` адаптируются к ней; верхней/нижней панелей нет, команды распределены между левой и правой; `Cmd/Ctrl+\\` скрывает панели, tool rail и подсказку без размонтирования, оставляя только canvas; retained WebGL перерисовывается после resize | Browser-сценарии темы и брендинга, identity смонтированной панели, точные pixels/hit-targets до/во время/после скрытия и SMZ profile |
+| Контекстные меню | Canvas, Layers, Pages и Inspector подавляют browser menu; для слоёв/страниц и выделения показываются собственные команды; Mac Control-click и Escape работают | Canvas Control-click, hide layer, panel default prevention и page menu в `interface.spec.ts` |
+| Inspector | Вкладки «Дизайн / Прототип», компактная позиция и шесть alignment commands, Auto Layout, Appearance, отдельные Fill/Stroke | Все Inspector/Prototype browser suites и визуальная проверка |
+| Figma pages | Видимые страницы и их имена сохраняются при импорте в исходных coordinate spaces, корни получают соответствующий `pageId`; переключение делает fit до render и переиспользует retained page scenes | Assertions на TCB.PAY и двухстраничном TCB.PAY.SMZ |
+| SMZ vectors и логотипы | Bell без derived geometry строится из `vectorNetwork`; mask-контур ТКБ не выводится как обычная чёрная заливка в canvas/Presentation; старая сохранённая модель обновляется повторным импортом `.fig` | Unit fixtures, SVG path/mask assertions и WebGL/Presentation screenshots |
+
+## Этап 8 «Объектные команды и точность рабочей области» — реализован
+
+| Область | Реализованное поведение | Проверка |
+| --- | --- | --- |
+| Object menu | Paste to replace, SVG/CSS copy, Prototype links, move to page, z-order, group/frame, rename, flatten/outline для фигур, Auto Layout, components, visibility/lock и flip работают через store и Undo/Redo; маски/плагины/виджеты не выдаются за готовые | Unit-тесты nodeOperations и browser-сценарий group → rename → flip → move to page |
+| Экспорт selection | Нижняя секция Inspector содержит PNG/SVG, 1–3×, preview и filename по имени объекта; глобального Export больше нет | Browser download assertions для `Акцент.svg` и `Акцент@2x.png` |
+| Controls и canvas-only | Panel toggle слева, Undo/Redo справа; footer содержит только object count и «масштаб»; ResizeObserver явно меняет оба drawing buffer при flex-resize | CSS/bitmap dimensions, red pixel в старой области и blue pixel в новооткрытой правой области, реальный SMZ 2480×1280 |
+| Текст и frame drag | Видимые текстовые фрагменты растрируются по zoom/DPR без прежнего cap 8× и с учётом GPU limit; подпись корня получает тот же deferred delta, что artwork/selection | 400%/6400% browser-сценарий, реальный SMZ на DPR 2, label position до и после release |
 
 ## Оставшиеся отличия от Figma
 
@@ -127,5 +144,5 @@
 
 ## Регрессионный контур
 
-- `npm test` — 67 проверок геометрии, иерархии, страниц и групп, snapping, selection, group transforms, text layout, Auto Layout и Fill/Hug, components и Variants, library, modes, CSS tokenizer, store, clipboard и реальный Figma import.
-- `npm run test:e2e` — 44 сценария: pointer/keyboard и русская раскладка, export, IndexedDB и legacy migration, страницы и группы, component/Auto Layout identity, selection scroll, темы и скрытие панелей, single-outline double-click, marquee, smart guides, transforms, reparenting, context menu, Auto Layout, instances, Variants, styles, Prototype, Dev Mode highlighting, library drag-and-drop, compositor pan/frame drag, pixel-level leaf/nested movement и TCB.PAY import/reload с non-blank canvas assertion.
+- `npm test` — 84 проверки геометрии, serializable document comparison, shared page projections, no-op/changed history, сохранения instance geometry/identities при main translation, vectorNetwork, mask metadata, zoom-dependent text resolution, object operations и affine flip, nonzero/evenodd contours и реального TKB hole, иерархии, страниц и фона, legacy groups, snapping, selection, group transforms, text layout, Auto Layout и Fill/Hug, components и Variants, library, modes, CSS tokenizer, store, clipboard и реальные Figma imports.
+- `npm run test:e2e` — 53 сценария: theme-aware логотип и favicon, pointer/keyboard и русская раскладка, object export с preview/format settings, IndexedDB и legacy migration, плоские страницы и независимый фон, мгновенная подсветка страницы до смены сцены, component/Auto Layout identity, selection scroll, темы и persistent panels, canvas-only режим с точными pixels/hit-targets и полным viewport, single-outline double-click, marquee, smart guides, transforms, deferred root commit с обновлением Inspector на release, reparenting, canvas/layer/page context menus, group/rename/flip/move-to-page и Control-click против deep-select, Auto Layout, instances, Variants, styles, Prototype с изолированной клавиатурой, Dev Mode highlighting, library drag-and-drop, compositor pan/frame drag/zoom, pixel-level leaf/nested movement, text resolution 100%/400%/6400% с texture tiling, точный pixel на 25 600% и после возврата к 100%, прозрачный pixel nonzero hole после финального WebGL-кадра, TCB.PAY import/reload и двухстраничный TCB.PAY.SMZ с non-blank canvas и Presentation assertions.

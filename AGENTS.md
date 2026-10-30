@@ -24,7 +24,7 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 
 ## Карта
 
-- `src/types.ts` — сериализуемая модель документа, страницы, группы и узлы.
+- `src/types.ts` — сериализуемая модель документа, страницы, фон, legacy group metadata и узлы.
 - `src/store/editorStore.ts` — полный документ всех страниц, команды, history, transient updates.
 - `src/utils/document.ts` — иерархия, абсолютная геометрия, WeakMap-индексы.
 - `src/utils/pages.ts` — страницы и производный документ активной страницы.
@@ -32,7 +32,7 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 - `src/components/EditorCanvas.tsx` — input, hit-test, transforms, snapping.
 - `src/components/PixiScene.tsx` — retained WebGL renderer и compositor preview.
 - `src/components/SceneNode.tsx` — SVG fallback и эталонная SVG-визуализация.
-- `src/components/LayersPanel.tsx` / `PagesPanel.tsx` — слои, страницы и группы.
+- `src/components/LayersPanel.tsx` / `PagesPanel.tsx` — слои и плоский список страниц; группы существуют только как legacy metadata.
 - `src/utils/figmaImport.ts` — граница Figma decoder и конвертация модели.
 - `src/utils/export.ts` — SVG/PNG/JSON.
 - `src/utils/storage.ts` — persistence и Forma → Malewich migration.
@@ -44,53 +44,60 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 ### Документ и страницы
 
 - `state.doc` содержит **все страницы**. Не заменяйте его производным `getPageDocument()` в командах сохранения или history.
+- Для no-op history используйте identity и `isDocumentContentEqual()` с ранним выходом, а не полный `JSON.stringify` документа. Сериализация остаётся только для storage/export.
 - `pageId` обязателен только у корневых слоёв; descendants определяют страницу через предков. Не дублируйте его на каждом узле без необходимости.
-- Canvas, layers, hit-test, snapping, fit, export и Presentation работают с активной страницей. Component library и persistence могут работать со всем документом.
+- Canvas, layers, hit-test, snapping, fit, export и Presentation работают с активной страницей. Component library и persistence могут работать со всем документом. `getPageDocument()` делит immutable projection между компонентами через WeakMap по документу и `pageId`; не мутируйте исходный документ или projection на месте.
 - Старые документы без `pages`/`pageId` трактуются как одна `page-1`; миграция не должна ломать существующие JSON.
-- Переключение страницы очищает selection. Группа страниц — metadata, не иерархический frame; удаление группы не удаляет страницы.
+- Переключение страницы очищает selection и вписывает её содержимое в viewport. Локальная подсветка строки страницы показывается до тяжёлой смены активной сцены; быстрые повторные клики отменяют устаревшие отложенные переключения. Группы страниц — только legacy metadata, не иерархический frame и не элемент текущего UI; удаление группы страниц не удаляет страницы. Объектные группы — отдельный случай: это прозрачные frame-узлы с `isGroup`, а не page groups.
+- `PageDefinition.background` относится только к своей странице. Тема меняет default фон, но не перезаписывает явно выбранный цвет.
 - Новые корни получают активную страницу через store pipeline. Сохраняйте это при добавлении новых способов создания/копирования узлов.
 
 ### Геометрия и editing
 
 - Координаты узлов абсолютные в page-space. При перемещении родителя потомки получают тот же мировой delta ровно один раз.
 - Auto Layout использует parent-relative геометрию. Не применяйте быстрый `preserveRelativeGeometry` путь к перемещению ребёнка внутри Auto Layout.
-- Сохраняйте clipping, masks, transforms и z-order. Не выводите nested frame в compositor overlay без учёта предков.
+- Сохраняйте clipping, masks, transforms и z-order. `flipX`/`flipY` участвуют в общей affine matrix, Pixi container scale, SVG/export и hit-test. Не выводите nested frame в compositor overlay без учёта предков.
 - Selection handles, labels и text editor остаются в SVG; canvas dots не должны перекрывать объекты или UI.
 - Не меняйте поведение frame labels только из-за видимого дублирования: в импортированном макете могут быть собственные текстовые подписи.
 
 ### Renderer и производительность
 
-- Renderer — PixiJS/WebGL с retained display objects и ручным `app.render()`, без постоянного ticker.
-- Чистый translation переиспользует visuals; не пересоздавайте текстуры и Graphics всего поддерева на каждый pointermove.
-- Не возвращайте RenderTexture-кэш корня. Transient frame drag использует существующее поддерево в отдельном canvas и финальный WebGL render.
+- Renderer — PixiJS/WebGL с retained display objects и ручным `app.render()`, без постоянного ticker. Асинхронные image/editing/resize invalidations коалесцируются в один rAF; resize не debounce.
+- Чистый translation переиспользует visuals; не пересоздавайте текстуры и Graphics всего поддерева на каждый pointermove. Посещённые страницы хранят retained worlds и очищаются при смене документа; неизменённый viewport повторно не рисуется.
+- Не возвращайте RenderTexture-кэш корня. При простом root drag `state.doc` остаётся immutable до release: существующее поддерево и selection получают общий deferred compositor delta, а document commit/history выполняются один раз. Nested, Auto Layout и reparenting не переводите на этот путь без учёта предков.
+- Чистый X/Y translation main component не должен запускать component reconciliation или менять identities/геометрию instances. Мемоизация Layers обязана пропускать transform-only изменения, но propagate display-изменения потомков и collapsed/renaming контекст.
 - Изменения nested transforms проверяйте pixel-сравнением incremental результата с полным rebuild после reload.
 - Сначала профилируйте реальный жест. Убедитесь, что цель видима, действительно выбрана и координата изменилась. Auto Layout может законно вернуть позицию ребёнка.
 - `data-render-ms` не включает всю нативную/software-WebGL растеризацию; CDP `(program)` тоже учитывайте.
+- Zoom выполняется через немедленный compositor preview и один финальный WebGL render после 90 мс паузы. Разрешение retained `Text` синхронизируется с zoom/DPR только у видимых объектов; длинные строки, не помещающиеся в GPU texture limit, делятся на retained-фрагменты. Не возвращайте общий предел 8× и не растрируйте весь длинный текст на 25 600% целиком. Максимальный zoom — `MAX_ZOOM = 256` (25 600%).
+- Vector fill использует `vectorFillPaths()` для outer+hole groups по winding; не возвращайтесь к ограниченному Pixi SVG parser, который теряет `nonzero` holes. Pixel-проверки крайнего zoom должны наводиться на заведомо закрашенную точку, а не на середину text bounds, где может быть межбуквенный пробел.
 
 ### Figma import
 
 - Поддерживаемая визуальная модель описана в README. Не заявляйте полную Figma parity.
 - Solid paints, абсолютная геометрия, editable text/vector, Auto Layout, components, variables и видимые страницы — основной проверенный контур.
 - Gradients, произвольные image fills, effects, masks и mixed text runs не считаются полностью поддержанными.
-- Expanded `strokeGeometry` не обводится повторно. Vector SVG должен нести собственные paint attributes.
-- Видимые Figma-страницы сохраняются раздельно; Internal Only Canvas пропускается.
-- Используйте реальный TCB.PAY regression и не меняйте сохранённую геометрию глобальным reflow при открытии.
+- Expanded `strokeGeometry` не обводится повторно. Vector SVG/export должен нести собственные paint attributes; прозрачные paints не создают Pixi draw instructions.
+- При отсутствии derived geometry используйте `vectorNetwork`, а не rectangle fallback. `isMask` — editable metadata, mask-контур не должен становиться обычной видимой заливкой; полный mask compositing отдельно не заявлен.
+- Видимые Figma-страницы сохраняются раздельно в исходных coordinate spaces; не сдвигайте их горизонтально друг относительно друга. Internal Only Canvas пропускается.
+- Используйте реальные `TCB.PAY.fig` и `TCB.PAY.SMZ.fig` regressions; не меняйте сохранённую геометрию глобальным reflow при открытии.
 
 ### UI и Dev Mode
 
 - Toolbar не перестраивайте без прямого запроса.
 - Frame/Auto Layout и Main Component/Instance должны визуально различаться и в слоях, и в инспекторе.
 - Selection в canvas раскрывает и прокручивает дерево, но не закрывает вкладку библиотеки.
-- Тема меняет интерфейс, не цвета макета. `Cmd/Ctrl+\\` скрывает боковые панели, не toolbar.
+- Тема меняет интерфейс, не цвета макета. Workspace не имеет верхней/нижней панелей: project/panel/zoom controls находятся слева, undo/redo/presentation/theme — справа; Export работает только для selection в Inspector. `Cmd/Ctrl+\\` скрывает боковые панели, tool rail и canvas hint через `hidden`/CSS без размонтирования; ResizeObserver явно resize-ит оба renderer и восстанавливает WebGL после изменения ширины, а pixel/hit-target regression обязателен.
 - Подсветка CSS строится React-токенами; не используйте `dangerouslySetInnerHTML` для generated code.
 
 ## Тесты и регрессии
 
-Базовый снимок содержит 67 unit-тестов и 44 browser-сценария; при добавлении тестов обновляйте документацию с фактическими числами.
+Базовый снимок содержит 67 unit-тестов и 44 browser-сценария; текущий контур после добавления SMZ, vector/mask, page/UI, extreme zoom/nonzero rendering, text tiling, object operations/export, deferred root labels, component/layer optimizations, branding и canvas-only exposed-pixel regressions — 84 и 53 соответственно. При добавлении тестов обновляйте документацию с фактическими числами.
 
 Обязательные специальные проверки:
 
-- TCB.PAY import/reload и non-blank canvas;
+- TCB.PAY import/reload и non-blank canvas; TCB.PAY.SMZ second page + Presentation;
+- Canvas Control-click menu не должен ломать Cmd/Ctrl+primary deep-select;
 - nested move incremental vs rebuild pixel equality;
 - изоляция двух страниц с одинаковыми координатами;
 - component/Auto Layout identity;

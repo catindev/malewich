@@ -53,7 +53,7 @@ function TextContent({ node }: { node: Extract<EditorNode, { type: 'text' }> }) 
 export function SceneNode({
   doc, node, onNodePointerDown, onTextDoubleClick, onNodeContextMenu, editingId, suppressedIds, worldTransform,
 }: SceneNodeProps) {
-  if (!node.visible || suppressedIds?.has(node.id)) return null;
+  if (!node.visible || node.isMask || suppressedIds?.has(node.id)) return null;
   const children = getChildren(doc, node.id);
   const insideStrokeClip = node.strokeAlign === 'inside' ? `url(#stroke-clip-${node.id})` : undefined;
   const common = {

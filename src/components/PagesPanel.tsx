@@ -1,30 +1,31 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Check,
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   ChevronRight,
   Copy,
   File,
   Files,
-  Folder,
-  FolderOpen,
-  FolderPlus,
+  Pencil,
   Plus,
   Trash2,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
-import { getActivePageId, getDocumentPages, getPageNodeIds } from '../utils/pages';
+import { getActivePageId, getDocumentPages } from '../utils/pages';
 
 function InlineName({ value, label, onCommit }: { value: string; label: string; onCommit: (value: string) => void }) {
   const [draft, setDraft] = useState(value);
+  const cancelled = useRef(false);
   return (
     <input
       className="page-name-input" value={draft} aria-label={label} autoFocus
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => onCommit(draft)}
+      onBlur={() => { if (!cancelled.current) onCommit(draft); }}
       onKeyDown={(event) => {
         if (event.key === 'Enter') event.currentTarget.blur();
         if (event.key === 'Escape') {
+          cancelled.current = true;
           setDraft(value);
           event.currentTarget.blur();
         }
@@ -41,54 +42,56 @@ export function PagesPanel() {
   const duplicatePage = useEditorStore((state) => state.duplicatePage);
   const renamePage = useEditorStore((state) => state.renamePage);
   const deletePage = useEditorStore((state) => state.deletePage);
-  const setPageGroup = useEditorStore((state) => state.setPageGroup);
-  const addPageGroup = useEditorStore((state) => state.addPageGroup);
-  const renamePageGroup = useEditorStore((state) => state.renamePageGroup);
-  const deletePageGroup = useEditorStore((state) => state.deletePageGroup);
+  const movePage = useEditorStore((state) => state.movePage);
+  const movePageTo = useEditorStore((state) => state.movePageTo);
   const [expanded, setExpanded] = useState(true);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [menu, setMenu] = useState<{ pageId: string; x: number; y: number } | null>(null);
+  const [pendingPageId, setPendingPageId] = useState<string | null>(null);
+  const switchFramesRef = useRef<number[]>([]);
   const pages = getDocumentPages(doc);
-  const groups = doc.pageGroups ?? [];
   const activePageId = getActivePageId(doc);
+  const displayedActivePageId = pendingPageId ?? activePageId;
+  const menuPageIndex = menu ? pages.findIndex((page) => page.id === menu.pageId) : -1;
 
-  const pageRow = (page: (typeof pages)[number]) => {
-    const count = getPageNodeIds(doc, page.id).size;
-    return (
-      <div
-        key={page.id}
-        className={`page-row${page.id === activePageId ? ' is-active' : ''}`}
-        data-page-id={page.id}
-        draggable={renamingId !== page.id}
-        onDragStart={(event) => {
-          event.dataTransfer.effectAllowed = 'move';
-          event.dataTransfer.setData('application/x-malewich-page', page.id);
-        }}
-        onClick={() => setActivePage(page.id)}
-        onDoubleClick={() => setRenamingId(page.id)}
-      >
-        <File size={13} className="page-row-icon" />
-        {renamingId === page.id ? (
-          <InlineName value={page.name} label="Название страницы" onCommit={(name) => {
-            renamePage(page.id, name);
-            setRenamingId(null);
-          }} />
-        ) : (
-          <div className="page-row-label"><span>{page.name}</span><small>{count} объектов</small></div>
-        )}
-        <div className="page-row-actions">
-          <button title="Дублировать страницу" onClick={(event) => { event.stopPropagation(); duplicatePage(page.id); }}><Copy size={12} /></button>
-          <button title="Удалить страницу" disabled={pages.length === 1} onClick={(event) => { event.stopPropagation(); deletePage(page.id); }}><Trash2 size={12} /></button>
-        </div>
-      </div>
-    );
+  const selectPage = (pageId: string) => {
+    switchFramesRef.current.forEach((frame) => cancelAnimationFrame(frame));
+    switchFramesRef.current = [];
+    if (pageId === activePageId) {
+      setPendingPageId(null);
+      return;
+    }
+    // Paint the selected row before React starts projecting and rendering the
+    // destination page. Two frames separate this light UI commit from WebGL work.
+    setPendingPageId(pageId);
+    const first = requestAnimationFrame(() => {
+      const second = requestAnimationFrame(() => setActivePage(pageId));
+      switchFramesRef.current = [second];
+    });
+    switchFramesRef.current = [first];
   };
 
-  const dropPage = (event: React.DragEvent, groupId: string | null) => {
-    event.preventDefault();
-    const pageId = event.dataTransfer.getData('application/x-malewich-page');
-    if (pageId) setPageGroup(pageId, groupId);
+  const runMenuAction = (action: () => void) => {
+    action();
+    setMenu(null);
   };
+
+  useEffect(() => setPendingPageId(null), [activePageId]);
+  useEffect(() => () => {
+    switchFramesRef.current.forEach((frame) => cancelAnimationFrame(frame));
+  }, []);
+
+  useEffect(() => {
+    if (!menu) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMenu(null);
+    };
+    window.addEventListener('keydown', close, true);
+    return () => window.removeEventListener('keydown', close, true);
+  }, [menu]);
 
   return (
     <section className={`pages-panel${expanded ? ' is-expanded' : ''}`}>
@@ -98,58 +101,78 @@ export function PagesPanel() {
           <Files size={14} /><span>Страницы</span><span className="page-count-badge">{pages.length}</span>
         </button>
         <div className="pages-header-actions">
-          <button title="Новая группа страниц" onClick={() => addPageGroup()}><FolderPlus size={14} /></button>
-          <button title="Новая страница" onClick={() => addPage()}><Plus size={15} /></button>
+          <button title="Новая страница" aria-label="Новая страница" onClick={() => addPage()}><Plus size={15} /></button>
         </div>
       </header>
       {expanded && (
         <div className="pages-list">
-          {groups.map((group) => {
-            const groupPages = pages.filter((page) => page.groupId === group.id);
-            const collapsed = collapsedGroups.has(group.id);
-            return (
-              <div className="page-group" key={group.id} data-page-group-id={group.id}>
-                <div
-                  className="page-group-header"
-                  onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
-                  onDrop={(event) => dropPage(event, group.id)}
-                >
-                  <button onClick={() => {
-                    const next = new Set(collapsedGroups);
-                    if (collapsed) next.delete(group.id); else next.add(group.id);
-                    setCollapsedGroups(next);
-                  }}>
-                    {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                    {collapsed ? <Folder size={13} /> : <FolderOpen size={13} />}
-                  </button>
-                  {renamingId === group.id ? (
-                    <InlineName value={group.name} label="Название группы страниц" onCommit={(name) => {
-                      renamePageGroup(group.id, name);
-                      setRenamingId(null);
-                    }} />
-                  ) : <span onDoubleClick={() => setRenamingId(group.id)}>{group.name}</span>}
-                  <div className="page-row-actions">
-                    <button title="Добавить страницу в группу" onClick={() => addPage(undefined, group.id)}><Plus size={12} /></button>
-                    <button title="Удалить группу, оставив страницы" onClick={() => deletePageGroup(group.id)}><Trash2 size={12} /></button>
-                  </div>
-                </div>
-                {!collapsed && (
-                  <div className="page-group-pages">
-                    {groupPages.length ? groupPages.map(pageRow) : <div className="page-group-empty">Перетащите страницу сюда</div>}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {groups.length > 0 && pages.some((page) => !page.groupId) && (
+          {pages.map((page) => (
             <div
-              className="pages-ungrouped-label"
-              onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
-              onDrop={(event) => dropPage(event, null)}
-            ><Check size={11} /> Без группы</div>
-          )}
-          {pages.filter((page) => !page.groupId || !groups.some((group) => group.id === page.groupId)).map(pageRow)}
+              key={page.id}
+              className={`page-row${page.id === displayedActivePageId ? ' is-active' : ''}`}
+              data-page-id={page.id}
+              aria-current={page.id === displayedActivePageId ? 'page' : undefined}
+              draggable={renamingId !== page.id}
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('application/x-malewich-page', page.id);
+              }}
+              onDragOver={(event) => {
+                if (event.dataTransfer.types.includes('application/x-malewich-page')) {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = 'move';
+                }
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                const pageId = event.dataTransfer.getData('application/x-malewich-page');
+                if (pageId) movePageTo(pageId, page.id);
+              }}
+              onClick={() => selectPage(page.id)}
+              onDoubleClick={() => setRenamingId(page.id)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                selectPage(page.id);
+                setMenu({
+                  pageId: page.id,
+                  x: Math.min(event.clientX, window.innerWidth - 238),
+                  y: Math.min(event.clientY, window.innerHeight - 270),
+                });
+              }}
+            >
+              <File size={13} className="page-row-icon" />
+              {renamingId === page.id ? (
+                <InlineName value={page.name} label="Название страницы" onCommit={(name) => {
+                  renamePage(page.id, name);
+                  setRenamingId(null);
+                }} />
+              ) : <div className="page-row-label"><span>{page.name}</span></div>}
+              <div className="page-row-actions">
+                <button title="Дублировать страницу" onClick={(event) => { event.stopPropagation(); duplicatePage(page.id); }}><Copy size={12} /></button>
+                <button title="Удалить страницу" disabled={pages.length === 1} onClick={(event) => { event.stopPropagation(); deletePage(page.id); }}><Trash2 size={12} /></button>
+              </div>
+            </div>
+          ))}
         </div>
+      )}
+      {menu && (
+        <>
+          <button className="popover-dismiss" aria-label="Закрыть меню страницы" onPointerDown={() => setMenu(null)} onContextMenu={(event) => event.preventDefault()} />
+          <div
+            className="canvas-context-menu page-context-menu popover" role="menu"
+            style={{ left: menu.x, top: menu.y }}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            <button onClick={() => runMenuAction(() => setRenamingId(menu.pageId))}><Pencil size={14} /><span>Переименовать</span></button>
+            <button onClick={() => runMenuAction(() => duplicatePage(menu.pageId))}><Copy size={14} /><span>Дублировать страницу</span></button>
+            <div className="popover-divider" />
+            <button disabled={menuPageIndex <= 0} onClick={() => runMenuAction(() => movePage(menu.pageId, 'up'))}><ArrowUp size={14} /><span>Переместить выше</span></button>
+            <button disabled={menuPageIndex < 0 || menuPageIndex === pages.length - 1} onClick={() => runMenuAction(() => movePage(menu.pageId, 'down'))}><ArrowDown size={14} /><span>Переместить ниже</span></button>
+            <div className="popover-divider" />
+            <button className="context-danger" disabled={pages.length === 1} onClick={() => runMenuAction(() => deletePage(menu.pageId))}><Trash2 size={14} /><span>Удалить страницу</span></button>
+          </div>
+        </>
       )}
     </section>
   );

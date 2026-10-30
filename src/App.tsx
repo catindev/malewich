@@ -3,7 +3,6 @@ import { EditorCanvas } from './components/EditorCanvas';
 import { Inspector } from './components/Inspector';
 import { LayersPanel } from './components/LayersPanel';
 import { Toolbar } from './components/Toolbar';
-import { Topbar } from './components/Topbar';
 import { useEditorStore } from './store/editorStore';
 import type { Tool } from './types';
 import { hydrateStoredDocument, saveDocument } from './utils/storage';
@@ -33,6 +32,10 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
+    document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+      ?.setAttribute('href', theme === 'dark' ? '/favicon-dark.svg' : '/favicon.svg');
+    document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+      ?.setAttribute('content', theme === 'dark' ? '#202021' : '#ffffff');
     localStorage.setItem('malewich:theme', theme);
   }, [theme]);
 
@@ -65,7 +68,7 @@ export default function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (isTypingTarget(event.target)) return;
+      if (isTypingTarget(event.target) || document.querySelector('.prototype-overlay')) return;
       const state = useEditorStore.getState();
       const command = event.metaKey || event.ctrlKey;
       if (command && (event.code === 'Backslash' || event.key === '\\')) {
@@ -84,6 +87,16 @@ export default function App() {
       if (command && key === 'y') {
         event.preventDefault();
         state.redo();
+        return;
+      }
+      if (command && key === 'g') {
+        event.preventDefault();
+        state.groupSelection(event.shiftKey);
+        return;
+      }
+      if (command && event.shiftKey && key === 'r') {
+        event.preventDefault();
+        state.pasteClipboard(true);
         return;
       }
       if (command && key === 'd') {
@@ -153,16 +166,17 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <Topbar
-        theme={theme} panelsVisible={panelsVisible}
-        onToggleTheme={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
-        onTogglePanels={() => setPanelsVisible((visible) => !visible)}
-      />
       <main className={`workspace${panelsVisible ? '' : ' is-panel-hidden'}`}>
-        <Toolbar />
-        {panelsVisible && <LayersPanel />}
+        <Toolbar hidden={!panelsVisible} />
+        <LayersPanel
+          hidden={!panelsVisible} panelsVisible={panelsVisible}
+          onTogglePanels={() => setPanelsVisible((visible) => !visible)}
+        />
         <EditorCanvas />
-        {panelsVisible && <Inspector />}
+        <Inspector
+          hidden={!panelsVisible} theme={theme}
+          onToggleTheme={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
+        />
       </main>
     </div>
   );

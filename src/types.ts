@@ -11,9 +11,13 @@ interface BaseNode {
   width: number;
   height: number;
   rotation: number;
+  flipX?: boolean;
+  flipY?: boolean;
   opacity: number;
   visible: boolean;
   locked: boolean;
+  /** Figma mask geometry is editable metadata, not ordinary visible artwork. */
+  isMask?: boolean;
   parentId: string | null;
   /** Set on root nodes; descendants inherit the page through their ancestor chain. */
   pageId?: string;
@@ -63,6 +67,8 @@ export interface FrameNode extends BaseNode {
   fill: string;
   cornerRadius: number;
   clip: boolean;
+  /** Lightweight Figma-like grouping without a separate renderer node type. */
+  isGroup?: boolean;
   autoLayout?: AutoLayoutSettings;
 }
 
@@ -156,6 +162,9 @@ export interface PrototypeLink {
 export interface PageDefinition {
   id: string;
   name: string;
+  /** Canvas color for this page. Undefined keeps the theme-aware default. */
+  background?: string;
+  /** Legacy metadata retained for JSON compatibility; the UI shows a flat page list. */
   groupId?: string | null;
 }
 

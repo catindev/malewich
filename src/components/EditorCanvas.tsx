@@ -1,14 +1,16 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
   type DragEvent as ReactDragEvent,
+  type CSSProperties,
 } from 'react';
-import { Check, Frame, Hand, Minus, MousePointer2, Plus, RotateCcw } from 'lucide-react';
+import { Check, Frame, Hand, MousePointer2, Plus } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import type {
   Bounds,
@@ -40,7 +42,6 @@ import {
   clamp,
   invertMatrix,
   matrixToString,
-  mergeBounds,
   nodeMatrix,
   normalizeRect,
   round,
@@ -57,13 +58,14 @@ import { SceneNode } from './SceneNode';
 import { SelectionOverlay, type ResizeHandle } from './SelectionOverlay';
 import { TextEditor } from './TextEditor';
 import { usePageDocument } from '../hooks/usePageDocument';
-import { getPageDocument } from '../utils/pages';
+import { getActivePageId, getDocumentPages, getPageDocument } from '../utils/pages';
+import { fitViewportToContent, fitViewportToSelection, zoomViewportAt } from '../utils/viewport';
 
 type Interaction =
   | { kind: 'pan'; pointerId: number; startClient: Point; startViewport: Viewport }
   | { kind: 'marquee'; pointerId: number; startWorld: Point; additive: boolean; baseSelection: string[] }
   | { kind: 'draw'; pointerId: number; nodeId: string; parentId: string | null; startLocal: Point; startDoc: DesignDocument }
-  | { kind: 'move'; pointerId: number; startWorld: Point; startDoc: DesignDocument; ids: string[]; targetId: string; additive: boolean; moved: boolean; snapBounds: Bounds[] }
+  | { kind: 'move'; pointerId: number; startWorld: Point; startDoc: DesignDocument; ids: string[]; rootIds: string[]; targetId: string; additive: boolean; moved: boolean; snapBounds: Bounds[]; deferDocument: boolean; lastDelta: Point }
   | { kind: 'resize'; pointerId: number; startWorld: Point; startDoc: DesignDocument; node: EditorNode; handle: ResizeHandle }
   | { kind: 'rotate'; pointerId: number; startDoc: DesignDocument; node: EditorNode; center: Point; startAngle: number }
   | { kind: 'groupResize'; pointerId: number; startWorld: Point; startDoc: DesignDocument; ids: string[]; startBounds: Bounds; handle: ResizeHandle }
@@ -76,6 +78,21 @@ function transformVector(matrix: { a: number; b: number; c: number; d: number },
     x: matrix.a * vector.x + matrix.c * vector.y,
     y: matrix.b * vector.x + matrix.d * vector.y,
   };
+}
+
+function translatedDocumentNodes(startDoc: DesignDocument, rootIds: string[], delta: Point): EditorNode[] {
+  let nodes = startDoc.nodes;
+  rootIds.forEach((id) => {
+    const node = getNode(startDoc, id);
+    if (!node) return;
+    const inverseParent = invertMatrix(getParentWorldMatrix(startDoc, node));
+    const localDelta = transformVector(inverseParent, delta);
+    const treeIds = new Set([id, ...getDescendantIds(startDoc, id)]);
+    nodes = nodes.map((candidate) => treeIds.has(candidate.id) ? {
+      ...candidate, x: round(candidate.x + localDelta.x), y: round(candidate.y + localDelta.y),
+    } : candidate);
+  });
+  return nodes;
 }
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -99,10 +116,10 @@ export function EditorCanvas() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectAllOnEdit, setSelectAllOnEdit] = useState(false);
   const [spacePressed, setSpacePressed] = useState(false);
-  const [zoomMenuOpen, setZoomMenuOpen] = useState(false);
   const [marquee, setMarquee] = useState<{ start: Point; current: Point } | null>(null);
   const [snapGuides, setSnapGuides] = useState<SnapGuide[]>([]);
   const [activeMoveIds, setActiveMoveIds] = useState<string[]>([]);
+  const [deferredMoveDelta, setDeferredMoveDelta] = useState<Point | null>(null);
   const [panning, setPanning] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; world: Point } | null>(null);
   const [webglFailed, setWebglFailed] = useState(() => new URLSearchParams(window.location.search).get('renderer') === 'svg');
@@ -120,70 +137,61 @@ export function EditorCanvas() {
   }, []);
 
   const fitToContent = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const currentDoc = getPageDocument(useEditorStore.getState().doc);
-    const visibleNodes = flattenDocument(currentDoc).filter((node) => node.visible);
-    const bounds = mergeBounds(visibleNodes.map((node) => getNodeBounds(currentDoc, node)));
-    const rect = container.getBoundingClientRect();
-    const padding = 100;
-    const zoom = clamp(Math.min(
-      (rect.width - padding) / Math.max(bounds.width, 1),
-      (rect.height - padding) / Math.max(bounds.height, 1),
-    ), 0.05, 1.5);
-    setViewport({
-      zoom,
-      x: rect.width / 2 - (bounds.x + bounds.width / 2) * zoom,
-      y: rect.height / 2 - (bounds.y + bounds.height / 2) * zoom,
-    });
-    setZoomMenuOpen(false);
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setViewport(fitViewportToContent(useEditorStore.getState().doc, rect));
   }, [setViewport]);
 
   const fitSelection = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
     const state = useEditorStore.getState();
-    const nodes = state.selection.flatMap((id) => {
-      const node = getNode(state.doc, id);
-      return node?.visible ? [node] : [];
-    });
-    if (nodes.length === 0) {
-      fitToContent();
-      return;
-    }
-    const bounds = mergeBounds(nodes.map((node) => getNodeBounds(state.doc, node)));
-    const rect = container.getBoundingClientRect();
-    const padding = 120;
-    const zoom = clamp(Math.min(
-      (rect.width - padding) / Math.max(bounds.width, 1),
-      (rect.height - padding) / Math.max(bounds.height, 1),
-    ), 0.05, 4);
-    setViewport({
-      zoom,
-      x: rect.width / 2 - (bounds.x + bounds.width / 2) * zoom,
-      y: rect.height / 2 - (bounds.y + bounds.height / 2) * zoom,
-    });
-    setZoomMenuOpen(false);
-  }, [fitToContent, setViewport]);
+    setViewport(fitViewportToSelection(state.doc, state.selection, rect));
+  }, [setViewport]);
 
   const zoomTo = useCallback((nextZoom: number, clientPoint?: Point) => {
     const current = useEditorStore.getState().viewport;
-    const zoom = clamp(nextZoom, 0.05, 4);
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
     const screenPoint = clientPoint ?? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    const localX = screenPoint.x - rect.left;
-    const localY = screenPoint.y - rect.top;
-    const worldX = (localX - current.x) / current.zoom;
-    const worldY = (localY - current.y) / current.zoom;
-    setViewport({ zoom, x: localX - worldX * zoom, y: localY - worldY * zoom });
-    setZoomMenuOpen(false);
+    setViewport(zoomViewportAt(current, nextZoom, {
+      x: screenPoint.x - rect.left,
+      y: screenPoint.y - rect.top,
+    }));
   }, [setViewport]);
 
+  const activePageId = getActivePageId(doc);
+  const activePage = getDocumentPages(doc).find((page) => page.id === activePageId);
+  const previousPageIdRef = useRef(activePageId);
+  const [isPageSwitching, setIsPageSwitching] = useState(false);
+
   useEffect(() => {
-    const frame = requestAnimationFrame(fitToContent);
-    return () => cancelAnimationFrame(frame);
-  }, [fitToContent]);
+    if (previousPageIdRef.current === activePageId) return;
+    previousPageIdRef.current = activePageId;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    // Start only after the destination commit. A timeline started before a
+    // heavy WebGL build can finish before the browser presents its first frame.
+    setIsPageSwitching(true);
+  }, [activePageId]);
+
+  useEffect(() => {
+    if (!isPageSwitching) return;
+    let timeout = 0;
+    // Let the blurred commit reach a real frame before starting the exit timer.
+    const frame = requestAnimationFrame(() => {
+      timeout = window.setTimeout(() => setIsPageSwitching(false), 120);
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [isPageSwitching]);
+
+  useLayoutEffect(() => {
+    // Fit before the renderer's passive effects. This avoids drawing a newly
+    // selected page once at the reset viewport and then immediately again.
+    fitToContent();
+  }, [activePageId, fitToContent]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -374,9 +382,14 @@ export function EditorCanvas() {
           .map((candidate) => getNodeBounds(pageStartDoc, candidate));
       })()
       : [];
+    const deferDocument = movableRootIds.length > 0 && movableRootIds.every((id) => {
+      const movingNode = getNode(startDoc, id);
+      return movingNode?.type === 'frame' && movingNode.parentId === null;
+    });
     interactionRef.current = {
       kind: 'move', pointerId: event.pointerId, startWorld: world,
-      startDoc, ids: movableIds, targetId, additive: event.shiftKey, moved: false, snapBounds,
+      startDoc, ids: movableIds, rootIds: movableRootIds, targetId, additive: event.shiftKey, moved: false, snapBounds,
+      deferDocument, lastDelta: { x: 0, y: 0 },
     };
   };
 
@@ -459,9 +472,7 @@ export function EditorCanvas() {
       (event.clientY - (interaction.startWorld.y * state.viewport.zoom + state.viewport.y + (svgRef.current?.getBoundingClientRect().top ?? 0))),
     ) > 2) interaction.moved = true;
     if (interaction.kind === 'move' && interaction.moved && !svgRef.current?.hasPointerCapture(event.pointerId)) {
-      setActiveMoveIds(interaction.ids.filter((id) => !interaction.ids.some(
-        (otherId) => otherId !== id && isDescendant(interaction.startDoc, id, otherId),
-      )));
+      setActiveMoveIds(interaction.rootIds);
       svgRef.current?.setPointerCapture(event.pointerId);
     }
     const world = screenToWorld(event.clientX, event.clientY);
@@ -505,9 +516,7 @@ export function EditorCanvas() {
         if (Math.abs(delta.x) > Math.abs(delta.y)) delta.y = 0;
         else delta.x = 0;
       }
-      const rootIds = interaction.ids.filter((id) => !interaction.ids.some(
-        (otherId) => otherId !== id && isDescendant(interaction.startDoc, id, otherId),
-      ));
+      const { rootIds } = interaction;
       if (rootIds.length === 1 && !event.altKey) {
         const movingNode = getNode(interaction.startDoc, rootIds[0]);
         if (movingNode) {
@@ -522,22 +531,19 @@ export function EditorCanvas() {
       } else {
         setSnapGuides([]);
       }
-      let nodes = interaction.startDoc.nodes;
-      rootIds.forEach((id) => {
-        const node = getNode(interaction.startDoc, id);
-        if (!node) return;
-        const inverseParent = invertMatrix(getParentWorldMatrix(interaction.startDoc, node));
-        const localDelta = transformVector(inverseParent, delta);
-        const treeIds = new Set([id, ...getDescendantIds(interaction.startDoc, id)]);
-        nodes = nodes.map((candidate) => treeIds.has(candidate.id) ? {
-          ...candidate, x: round(candidate.x + localDelta.x), y: round(candidate.y + localDelta.y),
-        } : candidate);
-      });
+      interaction.lastDelta = delta;
+      if (interaction.deferDocument) {
+        // Root frames already have a retained Pixi preview. Keep the document
+        // immutable during the gesture and commit this delta once on release.
+        setDeferredMoveDelta(delta);
+        return;
+      }
       const preserveRelativeGeometry = rootIds.every((id) => {
         const node = getNode(interaction.startDoc, id);
         const parent = getNode(interaction.startDoc, node?.parentId ?? null);
         return parent?.type !== 'frame' || !parent.autoLayout;
       });
+      const nodes = translatedDocumentNodes(interaction.startDoc, rootIds, delta);
       state.transient((current) => ({ ...current, nodes }), { preserveRelativeGeometry });
       return;
     }
@@ -704,6 +710,10 @@ export function EditorCanvas() {
     if (interaction.kind === 'move' && !interaction.moved && !interaction.additive && interaction.ids.length > 1) {
       state.setSelection([interaction.targetId]);
     }
+    if (interaction.kind === 'move' && interaction.deferDocument && interaction.moved) {
+      const nodes = translatedDocumentNodes(interaction.startDoc, interaction.rootIds, interaction.lastDelta);
+      state.transient((current) => ({ ...current, nodes }), { preserveRelativeGeometry: true });
+    }
     if (interaction.kind === 'move' && interaction.ids.length === 1) {
       const movingNode = getNode(state.doc, interaction.ids[0]);
       const pageDoc = getPageDocument(state.doc);
@@ -747,6 +757,7 @@ export function EditorCanvas() {
     if (interaction.kind === 'marquee') setMarquee(null);
     setSnapGuides([]);
     setActiveMoveIds([]);
+    setDeferredMoveDelta(null);
     if (interaction.kind !== 'pan' && interaction.kind !== 'marquee') {
       state.recordSnapshot(interaction.startDoc);
     }
@@ -777,7 +788,9 @@ export function EditorCanvas() {
   const handleNodeContextMenu = (event: ReactMouseEvent<Element>, node: EditorNode) => {
     event.preventDefault();
     event.stopPropagation();
-    if (event.ctrlKey || event.metaKey) return;
+    // Cmd/Ctrl+primary click is deep-select, not a request for the context menu.
+    // A modified secondary click still opens our menu instead of the browser's.
+    if ((event.ctrlKey || event.metaKey) && event.button === 0) return;
     const state = useEditorStore.getState();
     const targetId = getSelectionTarget(state.doc, node, state.selection);
     if (!state.selection.includes(targetId)) setSelection([targetId]);
@@ -786,7 +799,7 @@ export function EditorCanvas() {
 
   const handleBackgroundContextMenu = (event: ReactMouseEvent<SVGSVGElement>) => {
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey) return;
+    if ((event.ctrlKey || event.metaKey) && event.button === 0) return;
     setSelection([]);
     openContextMenu(event.clientX, event.clientY);
   };
@@ -848,7 +861,6 @@ export function EditorCanvas() {
     return node?.type === 'frame' && node.parentId === null;
   }), [activeMoveIds, doc]);
   const isHand = tool === 'hand' || spacePressed;
-  const zoomPercent = Math.round(viewport.zoom * 100);
   const pointerNode = (event: { target: EventTarget | null; clientX: number; clientY: number }) => {
     const id = event.target instanceof Element
       ? event.target.closest('[data-node-id]')?.getAttribute('data-node-id')
@@ -857,10 +869,13 @@ export function EditorCanvas() {
   };
 
   return (
-    <section className="canvas-column">
+    <section
+      className="canvas-column"
+      style={activePage?.background ? { '--page-background': activePage.background } as CSSProperties : undefined}
+    >
       <div
         ref={containerRef}
-        className={`canvas-viewport${isHand ? ' is-hand' : ''}${tool !== 'select' && tool !== 'hand' ? ' is-drawing' : ''}`}
+        className={`canvas-viewport${isHand ? ' is-hand' : ''}${tool !== 'select' && tool !== 'hand' ? ' is-drawing' : ''}${isPageSwitching ? ' is-page-switching' : ''}`}
         onDragOver={(event) => {
           if (event.dataTransfer.types.includes('application/x-malewich-component')) {
             event.preventDefault();
@@ -875,7 +890,7 @@ export function EditorCanvas() {
               id="canvas-grid" width="24" height="24" patternUnits="userSpaceOnUse"
               patternTransform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}
             >
-              <circle cx="1" cy="1" r={0.75 / viewport.zoom} fill="#d5d5d5" />
+              <circle cx="1" cy="1" r={0.65 / viewport.zoom} fill="rgba(76, 92, 100, 0.28)" />
             </pattern>
           </defs>
           <rect width="100%" height="100%" fill="url(#canvas-grid)" />
@@ -883,7 +898,8 @@ export function EditorCanvas() {
         {!webglFailed && (
           <PixiScene
             doc={doc} viewport={viewport} editingId={editingId} panning={panning}
-            movingIds={compositorMoveIds} suppressedIds={suppressedMoveIds} onFallback={handleRendererFallback}
+            movingIds={compositorMoveIds} moveDelta={deferredMoveDelta}
+            suppressedIds={suppressedMoveIds} onFallback={handleRendererFallback}
           />
         )}
         <svg
@@ -930,8 +946,12 @@ export function EditorCanvas() {
               />
             ))}
             {rootNodes.filter((node) => node.type === 'frame' && node.visible && (viewport.zoom >= 0.2 || selection.includes(node.id))).map((frame) => (
-              <g key={`label-${frame.id}`} transform={matrixToString(nodeMatrix(frame))}>
+              <g
+                key={`label-${frame.id}`}
+                transform={`${deferredMoveDelta && compositorMoveIds.includes(frame.id) ? `translate(${deferredMoveDelta.x} ${deferredMoveDelta.y}) ` : ''}${matrixToString(nodeMatrix(frame))}`}
+              >
                 <text
+                  data-frame-label-id={frame.id}
                   className={`frame-label${selection.includes(frame.id) ? ' is-selected' : ''}`}
                   x={frame.x} y={frame.y - 10 / viewport.zoom}
                   fontSize={12 / viewport.zoom}
@@ -964,11 +984,13 @@ export function EditorCanvas() {
                 fill="rgba(115, 87, 255, .08)" stroke="#7357ff" strokeWidth={1 / viewport.zoom}
               />
             )}
-            <SelectionOverlay
-              doc={doc} nodes={editingId ? [] : selectedNodes} zoom={viewport.zoom}
-              onResize={handleResize} onRotate={handleRotate}
-              onGroupResize={handleGroupResize} onGroupRotate={handleGroupRotate}
-            />
+            <g transform={deferredMoveDelta ? `translate(${deferredMoveDelta.x} ${deferredMoveDelta.y})` : undefined}>
+              <SelectionOverlay
+                doc={doc} nodes={editingId ? [] : selectedNodes} zoom={viewport.zoom}
+                onResize={handleResize} onRotate={handleRotate}
+                onGroupResize={handleGroupResize} onGroupRotate={handleGroupRotate}
+              />
+            </g>
             {editingNode?.type === 'text' && (
               <TextEditor
                 doc={doc} node={editingNode} selectAll={selectAllOnEdit}
@@ -1019,32 +1041,6 @@ export function EditorCanvas() {
           <span>{isHand ? 'Потяните, чтобы переместить холст' : tool === 'select' ? 'V — выделение · H — рука' : 'Потяните на холсте, чтобы создать объект'}</span>
         </div>
       </div>
-      <footer className="canvas-statusbar">
-        <div className="statusbar-summary">
-          <span>{doc.nodes.length} {doc.nodes.length === 1 ? 'объект' : 'объектов'}</span>
-          <span className="statusbar-separator" />
-          <span>{selection.length ? `Выбрано: ${selection.length}` : 'Локальный проект'}</span>
-        </div>
-        <div className="zoom-controls">
-          <button title="Уменьшить" onClick={() => zoomTo(viewport.zoom / 1.2)}><Minus size={14} /></button>
-          <div className="zoom-select">
-            <button className="zoom-value" onClick={() => setZoomMenuOpen(!zoomMenuOpen)}>{zoomPercent}%</button>
-            {zoomMenuOpen && (
-              <div className="zoom-menu popover">
-                {[25, 50, 100, 200, 400].map((value) => (
-                  <button key={value} onClick={() => zoomTo(value / 100)}>{value}%</button>
-                ))}
-                <div className="popover-divider" />
-                <button onClick={fitToContent}>Вписать в экран <kbd>⇧1</kbd></button>
-                <button onClick={fitSelection} disabled={selection.length === 0}>Вписать выделение <kbd>⇧2</kbd></button>
-                <button onClick={() => zoomTo(1)}>Масштаб 100% <kbd>0</kbd></button>
-              </div>
-            )}
-          </div>
-          <button title="Увеличить" onClick={() => zoomTo(viewport.zoom * 1.2)}><Plus size={14} /></button>
-          <button title="Вписать в экран" onClick={fitToContent}><RotateCcw size={14} /></button>
-        </div>
-      </footer>
       <input
         ref={fileInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
         hidden onChange={(event) => {

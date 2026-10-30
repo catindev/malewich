@@ -64,6 +64,7 @@ test('component instances preserve overrides and synchronize after reset', async
   await page.keyboard.down('Control');
   await instanceChild.click();
   await page.keyboard.up('Control');
+  await expect(page.locator('.canvas-context-menu')).toHaveCount(0);
   await property(page, 'X').fill('55');
   await property(page, 'X').press('Enter');
   await expect(page.locator('.component-status')).toContainText('overrides: 1');
