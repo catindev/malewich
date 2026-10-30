@@ -28,7 +28,7 @@ export function createWelcomeDocument(): DesignDocument {
       id: 'welcome-kicker', type: 'text', name: 'Подзаголовок', x: 88, y: 86,
       width: 360, height: 28, rotation: 0, opacity: 1, visible: true, locked: false,
       parentId: 'welcome-frame', fill: '#746d61', stroke: 'transparent', strokeWidth: 0,
-      text: 'MALEWICH / ВАШ НОВЫЙ ХОЛСТ', fontSize: 16, fontFamily: 'Inter, Arial, sans-serif',
+      text: 'МАЛЕВИЧ / ВАШ НОВЫЙ ХОЛСТ', fontSize: 16, fontFamily: 'Inter, Arial, sans-serif',
       fontWeight: 600, lineHeight: 1.2, letterSpacing: 2, textAlign: 'left',
     },
     {
