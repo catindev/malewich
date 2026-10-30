@@ -66,6 +66,81 @@ export function decodeGeometryPath(blob: Uint8Array): string {
   return commands.join(' ');
 }
 
+type FigmaVectorNetwork = NonNullable<FigmaSceneNode['vectorNetwork']>;
+
+/** Convert Figma vertices/segments when derived fill/stroke geometry is absent. */
+export function decodeVectorNetwork(network: FigmaVectorNetwork): string {
+  const commands: string[] = [];
+  const used = new Set<number>();
+  const adjacency = new Map<number, number[]>();
+  network.segments.forEach((segment, index) => {
+    for (const vertex of [segment.start, segment.end]) {
+      const indices = adjacency.get(vertex) ?? [];
+      indices.push(index);
+      adjacency.set(vertex, indices);
+    }
+  });
+  const number = (value: number) => String(Math.abs(value) < 0.0005 ? 0 : Number(value.toFixed(3)));
+  const point = (vertex: { x: number; y: number }) => `${number(vertex.x)} ${number(vertex.y)}`;
+  const append = (index: number, from: number): number => {
+    const segment = network.segments[index];
+    const forward = segment.start === from;
+    const start = network.vertices[from];
+    const endIndex = forward ? segment.end : segment.start;
+    const end = network.vertices[endIndex];
+    const tangentStart = forward ? segment.tangentStart : segment.tangentEnd;
+    const tangentEnd = forward ? segment.tangentEnd : segment.tangentStart;
+    const firstControl = { x: start.x + tangentStart.x, y: start.y + tangentStart.y };
+    const secondControl = { x: end.x + tangentEnd.x, y: end.y + tangentEnd.y };
+    commands.push(tangentStart.x === 0 && tangentStart.y === 0 && tangentEnd.x === 0 && tangentEnd.y === 0
+      ? `L${point(end)}`
+      : `C${point(firstControl)} ${point(secondControl)} ${point(end)}`);
+    used.add(index);
+    return endIndex;
+  };
+  const appendSequence = (indices: number[], close: boolean) => {
+    const first = network.segments[indices[0]];
+    if (!first) return;
+    let start = first.start;
+    if (indices.length > 1) {
+      const second = network.segments[indices[1]];
+      const endConnects = first.end === second.start || first.end === second.end;
+      if (!endConnects) start = first.end;
+    }
+    let current = start;
+    commands.push(`M${point(network.vertices[start])}`);
+    for (const index of indices) {
+      if (network.segments[index].start !== current && network.segments[index].end !== current) break;
+      current = append(index, current);
+    }
+    if (close && current === start) commands.push('Z');
+  };
+
+  // Region loops preserve Figma's fill winding and disconnected holes.
+  network.regions.forEach((region) => region.loops.forEach((loop) => appendSequence(loop, true)));
+  // Open strokes are not regions. Walk their connected segments as one path so
+  // line caps/joins are not incorrectly restarted for every segment.
+  for (let index = 0; index < network.segments.length; index += 1) {
+    if (used.has(index)) continue;
+    const first = network.segments[index];
+    const startDegree = adjacency.get(first.start)?.filter((candidate) => !used.has(candidate)).length ?? 0;
+    const endDegree = adjacency.get(first.end)?.filter((candidate) => !used.has(candidate)).length ?? 0;
+    let current = endDegree === 1 && startDegree > 1 ? first.end : first.start;
+    const start = current;
+    commands.push(`M${point(network.vertices[start])}`);
+    let segmentIndex: number | undefined = index;
+    while (segmentIndex !== undefined && !used.has(segmentIndex)) {
+      current = append(segmentIndex, current);
+      if (current === start) {
+        commands.push('Z');
+        break;
+      }
+      segmentIndex = adjacency.get(current)?.find((candidate) => !used.has(candidate));
+    }
+  }
+  return commands.join(' ');
+}
+
 function mapAutoLayout(node: FigmaSceneNode, children: FigmaSceneNode[]): AutoLayoutSettings | undefined {
   if (node.layoutMode !== 'HORIZONTAL' && node.layoutMode !== 'VERTICAL') return undefined;
   const horizontal = node.layoutMode === 'HORIZONTAL';
@@ -194,7 +269,6 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
   const nodes: EditorNode[] = [];
   const importedByGraphId = new Map<string, EditorNode>();
   const instanceSources = new Map<string, { ownerId: string; sourceId: string }>();
-  let nextPageX = 0;
 
   const visit = (node: FigmaSceneNode, parentId: string | null, offsetX: number, pageId: string) => {
     const absolute = graph.getAbsolutePosition(node.id);
@@ -236,6 +310,7 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
       opacity: node.opacity,
       visible: node.visible,
       locked: node.locked,
+      isMask: node.isMask || undefined,
       parentId,
       pageId: parentId === null ? pageId : undefined,
       fill: fill ? figColorToCss(fill.color, fill.opacity) : 'transparent',
@@ -264,7 +339,9 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
       const fillGeometry = node.fillGeometry[0];
       const strokeGeometry = node.strokeGeometry[0];
       const geometry = fillGeometry ?? strokeGeometry;
-      const path = geometry ? decodeGeometryPath(geometry.commandsBlob) : '';
+      const path = geometry
+        ? decodeGeometryPath(geometry.commandsBlob)
+        : node.vectorNetwork ? decodeVectorNetwork(node.vectorNetwork) : '';
       // Figma's strokeGeometry is already an expanded outline. Fill that
       // outline with the stroke paint instead of stroking it a second time.
       const bakeStroke = !fillGeometry && !!strokeGeometry && !!stroke;
@@ -285,7 +362,7 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
         path: path || `M0 0H${node.width}V${node.height}H0Z`,
         pathWidth: Math.max(0.01, node.width),
         pathHeight: Math.max(0.01, node.height),
-        fillRule: geometry?.windingRule === 'EVENODD' ? 'evenodd' : 'nonzero',
+        fillRule: geometry?.windingRule === 'EVENODD' || (!geometry && node.vectorNetwork?.regions.some((region) => region.windingRule === 'EVENODD')) ? 'evenodd' : 'nonzero',
       } satisfies VectorNode;
     } else if (node.type === 'RECTANGLE' || node.type === 'ROUNDED_RECTANGLE') {
       imported = {
@@ -324,12 +401,9 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
 
   pages.forEach((page, pageIndex) => {
     const roots = graph.getChildren(page.id);
-    if (roots.length === 0) return;
-    const positions = roots.map((root) => ({ x: graph.getAbsolutePosition(root.id).x, right: graph.getAbsolutePosition(root.id).x + root.width }));
-    const minX = Math.min(...positions.map((position) => position.x));
-    const offsetX = pageIndex === 0 ? 0 : nextPageX - minX;
-    roots.forEach((root) => visit(root, null, offsetX, `fig-page-${pageIndex}`));
-    nextPageX = Math.max(...positions.map((position) => position.right + offsetX)) + 200;
+    // Pages are independent coordinate spaces. Never lay them out side by side:
+    // doing so moves a newly selected page thousands of pixels outside the viewport.
+    roots.forEach((root) => visit(root, null, 0, `fig-page-${pageIndex}`));
   });
 
   // Keep source links, but freeze only values that actually differ from the main component.

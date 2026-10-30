@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { syncComponents } from './components';
-import { decodeGeometryPath, figColorToCss, importFigmaDocument } from './figmaImport';
+import { decodeGeometryPath, decodeVectorNetwork, figColorToCss, importFigmaDocument } from './figmaImport';
 import { resolveVariables } from './library';
 import { isDesignDocument } from './storage';
 
@@ -12,6 +12,12 @@ function fixtureBuffer(): ArrayBuffer {
 
 function importFixture() {
   return importFigmaDocument(fixtureBuffer(), 'TCB.PAY.fig');
+}
+
+function importSmzFixture() {
+  const bytes = readFileSync(new URL('../../e2e/fixtures/TCB.PAY.SMZ.fig', import.meta.url));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return importFigmaDocument(buffer, 'TCB.PAY.SMZ.fig');
 }
 
 describe('Figma geometry and colors', () => {
@@ -28,6 +34,18 @@ describe('Figma geometry and colors', () => {
     [0, 0, 5, 5, 10, 10].forEach((value, index) => view.setFloat32(19 + index * 4, value, true));
     blob[43] = 0;
     expect(decodeGeometryPath(blob)).toBe('M1.25 2.5 L10 20 C0 0 5 5 10 10 Z');
+  });
+
+  it('decodes closed vector regions and open stroke segments without rectangle fallbacks', () => {
+    expect(decodeVectorNetwork({
+      vertices: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 20 }, { x: 30, y: 20 }],
+      segments: [
+        { start: 0, end: 1, tangentStart: { x: 0, y: -5 }, tangentEnd: { x: -2, y: 0 } },
+        { start: 1, end: 0, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+        { start: 2, end: 3, tangentStart: { x: 0, y: 0 }, tangentEnd: { x: 0, y: 0 } },
+      ],
+      regions: [{ windingRule: 'NONZERO', loops: [[0, 1]] }],
+    })).toBe('M0 0 C0 -5 8 0 10 0 L0 0 Z M20 20 L30 20');
   });
 
   it('converts opaque and translucent Figma colors', () => {
@@ -95,5 +113,31 @@ describe('TCB.PAY import', () => {
       if (Object.values(delta).some((value) => value > 0.05)) differences.push({ id: source.id, name: source.name, delta });
     });
     expect(differences, JSON.stringify(differences.slice(0, 12), null, 2)).toHaveLength(0);
+  });
+
+  it('keeps both SMZ pages populated in their original coordinate spaces', () => {
+    const doc = importSmzFixture();
+    expect(doc.pages).toEqual([
+      { id: 'fig-page-0', name: 'Справки' },
+      { id: 'fig-page-1', name: 'Уведомления' },
+    ]);
+    expect(doc.nodes).toHaveLength(4477);
+    expect(doc.nodes.find((node) => node.id === 'fig-0-253')).toMatchObject({ pageId: 'fig-page-0', x: 200, y: 482 });
+    expect(doc.nodes.find((node) => node.id === 'fig-0-993')).toMatchObject({ pageId: 'fig-page-1', x: 168, y: 482, width: 1440, height: 1000 });
+    expect(doc.nodes.find((node) => node.id === 'fig-0-842')).toMatchObject({ pageId: 'fig-page-1', x: 1688, y: 482 });
+  });
+
+  it('imports SMZ bell curves and identifies logo mask containers', () => {
+    const doc = importSmzFixture();
+    const bell = doc.nodes.find((node) => node.id === 'fig-0-2179');
+    expect(bell).toMatchObject({
+      type: 'vector', fill: 'transparent', stroke: '#02807c', strokeWidth: 1.274999976158142,
+    });
+    expect(bell?.type === 'vector' && bell.path).toContain('C');
+    expect(bell?.type === 'vector' && bell.path).toContain('M7.5 15.75 L10.5 15.75');
+    expect(bell?.type === 'vector' && bell.path).not.toBe('M0 0H18V18H0Z');
+    expect(doc.nodes.find((node) => node.id === 'fig-0-2344')).toMatchObject({
+      type: 'frame', name: 'clip0_10_4104', isMask: true,
+    });
   });
 });
