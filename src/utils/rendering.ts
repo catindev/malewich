@@ -12,6 +12,12 @@ export function textResolutionForZoom(zoom: number, devicePixelRatio = 1): numbe
   return Math.min(MAX_ZOOM * 2, Math.max(1, baseResolution * zoom));
 }
 
+/** Keep culling overscan proportional to the viewport instead of allocating a large fixed margin. */
+export function previewOverscan(width: number, height: number): number {
+  if (!(width > 0 && height > 0)) return 0;
+  return Math.min(128, Math.min(width, height) / 8);
+}
+
 interface VectorContour {
   data: string;
   polygon: Polygon;

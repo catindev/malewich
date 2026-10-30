@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { syncComponents } from './components';
 import { decodeGeometryPath, decodeVectorNetwork, figColorToCss, importFigmaDocument } from './figmaImport';
+import { applyMatrix, multiplyMatrix, nodeMatrix } from './geometry';
 import { resolveVariables } from './library';
 import { isDesignDocument } from './storage';
 
@@ -18,6 +19,12 @@ function importSmzFixture() {
   const bytes = readFileSync(new URL('../../e2e/fixtures/TCB.PAY.SMZ.fig', import.meta.url));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
   return importFigmaDocument(buffer, 'TCB.PAY.SMZ.fig');
+}
+
+function importCommunityFixture(name: string) {
+  const bytes = readFileSync(new URL(`../../e2e/fixtures/${name}`, import.meta.url));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  return importFigmaDocument(buffer, name);
 }
 
 describe('Figma geometry and colors', () => {
@@ -139,5 +146,58 @@ describe('TCB.PAY import', () => {
     expect(doc.nodes.find((node) => node.id === 'fig-0-2344')).toMatchObject({
       type: 'frame', name: 'clip0_10_4104', isMask: true,
     });
+  });
+});
+
+describe('Community FIG regressions', () => {
+  it('materializes an embedded image fill instead of a transparent cover', () => {
+    const doc = importCommunityFixture('UI Prep.Cover.fig');
+    const cover = doc.nodes.find((node) => node.id === 'fig-0-4');
+    expect(cover).toMatchObject({
+      type: 'image', name: 'Cover', width: 1920, height: 960, objectFit: 'cover',
+    });
+    expect(cover?.type === 'image' && cover.src.startsWith('data:image/png;base64,')).toBe(true);
+  });
+
+  it('preserves Figma world transforms without applying reflected geometry twice', () => {
+    const doc = importCommunityFixture('Globbb.Pages.fig');
+    expect(doc.nodes).toHaveLength(95);
+    expect(doc.nodes.find((node) => node.id === 'fig-0-45')).toMatchObject({
+      type: 'frame', name: 'Picture', x: 1083, y: 155, flipX: true, clip: true,
+    });
+    expect(doc.nodes.find((node) => node.id === 'fig-0-98')).toMatchObject({
+      type: 'vector', flipX: true, rotation: 35.52297501957209,
+    });
+
+    const worldOrigin = (id: string) => {
+      const node = doc.nodes.find((candidate) => candidate.id === id)!;
+      let matrix = nodeMatrix(node);
+      let parentId = node.parentId;
+      while (parentId) {
+        const parent = doc.nodes.find((candidate) => candidate.id === parentId)!;
+        matrix = multiplyMatrix(nodeMatrix(parent), matrix);
+        parentId = parent.parentId;
+      }
+      return applyMatrix(matrix, node);
+    };
+    const picture = worldOrigin('fig-0-45');
+    expect(picture.x).toBeCloseTo(1957, 6);
+    expect(picture.y).toBeCloseTo(155, 6);
+    const brain = worldOrigin('fig-0-47');
+    expect(brain.x).toBeCloseTo(1760.2060546875, 6);
+    expect(brain.y).toBeCloseTo(164.1639099121094, 6);
+    const arm = worldOrigin('fig-0-98');
+    expect(arm.x).toBeCloseTo(495.875732421875, 6);
+    expect(arm.y).toBeCloseTo(371.39723205566406, 6);
+  });
+
+  it('retains the source font and supports stretched embedded image paints', () => {
+    const doc = importCommunityFixture('UI Prep.Buttons.fig');
+    expect(doc.nodes.find((node) => node.id === 'fig-0-6')).toMatchObject({
+      type: 'text', fontFamily: 'SF Pro Text',
+    });
+    const image = doc.nodes.find((node) => node.id === 'fig-0-85');
+    expect(image).toMatchObject({ type: 'image', objectFit: 'fill' });
+    expect(image?.type === 'image' && image.src.startsWith('data:image/png;base64,')).toBe(true);
   });
 });

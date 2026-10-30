@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Application, CanvasTextMetrics, Container, Graphics, GraphicsPath, Sprite, Text, Texture } from 'pixi.js';
 import type { DesignDocument, EditorNode, Point, TextNode, Viewport } from '../types';
-import { getTextLines } from '../utils/text';
+import { fontFamilyWithFallback, getTextLines, invalidateTextLayoutCaches } from '../utils/text';
+import { measurePixiText } from '../utils/pixiTextCache';
 import { getActivePageId } from '../utils/pages';
-import { textResolutionForZoom, vectorFillPaths } from '../utils/rendering';
+import { previewOverscan, textResolutionForZoom, vectorFillPaths } from '../utils/rendering';
+import { acquireImageTexture, imageBucketForSize, imageTextureCacheStats } from '../utils/imageTextures';
+import type { DocumentChange } from '../utils/documentChanges';
 
 interface PixiSceneProps {
   doc: DesignDocument;
+  change: DocumentChange;
   viewport: Viewport;
   editingId: string | null;
   panning: boolean;
@@ -23,6 +27,7 @@ interface TextChunk {
 
 interface TextVisualState {
   base: Text;
+  greek: Graphics;
   chunks: Container;
   items: TextChunk[];
   chunkKey: string | null;
@@ -35,6 +40,7 @@ interface NodeView {
   visual: Container | null;
   text: TextVisualState | null;
   mask: Graphics | null;
+  image: { bucket: number; key: string; release: () => void } | null;
   cleanup: (() => void) | null;
   invalidate: () => void;
 }
@@ -89,6 +95,28 @@ function createShapeVisual(node: EditorNode): Container {
   return group;
 }
 
+function createGreekText(node: TextNode, base: Text, measured: CanvasTextMetrics): Graphics {
+  const greek = new Graphics();
+  const baseLeft = base.x - base.anchor.x * measured.width;
+  const fill = paint(node.fill);
+  measured.lines.forEach((line, lineIndex) => {
+    const width = measured.lineWidths[lineIndex];
+    if (!line || width <= 0) return;
+    const alignOffset = base.style.align === 'center'
+      ? (measured.maxLineWidth - width) / 2
+      : base.style.align === 'right' ? measured.maxLineWidth - width : 0;
+    greek.rect(
+      baseLeft + alignOffset,
+      base.y + lineIndex * measured.lineHeight + node.fontSize * 0.35,
+      width,
+      Math.max(0.5, node.fontSize * 0.55),
+    );
+  });
+  greek.fill({ color: fill.color, alpha: fill.alpha * 0.35 });
+  greek.visible = false;
+  return greek;
+}
+
 function createTextVisual(node: TextNode): { visual: Container; state: TextVisualState } {
   const anchor = node.textAlign === 'center' ? 0.5 : node.textAlign === 'right' ? 1 : 0;
   const x = node.textAlign === 'center'
@@ -98,7 +126,7 @@ function createTextVisual(node: TextNode): { visual: Container; state: TextVisua
     text: getTextLines(node).join('\n'),
     style: {
       fill: paint(node.fill).color,
-      fontFamily: node.fontFamily,
+      fontFamily: fontFamilyWithFallback(node.fontFamily),
       fontSize: node.fontSize,
       fontWeight: String(node.fontWeight) as Text['style']['fontWeight'],
       lineHeight: node.fontSize * node.lineHeight,
@@ -114,16 +142,19 @@ function createTextVisual(node: TextNode): { visual: Container; state: TextVisua
   base.resolution = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
   const chunks = new Container({ label: `text-tiles:${node.id}` });
   chunks.visible = false;
+  const measured = CanvasTextMetrics.measureText(base.text, base.style);
+  const greek = createGreekText(node, base, measured);
   const visual = new Container();
-  visual.addChild(base, chunks);
+  visual.addChild(base, greek, chunks);
   return {
     visual,
     state: {
       base,
+      greek,
       chunks,
       items: [],
       chunkKey: null,
-      measured: CanvasTextMetrics.measureText(base.text, base.style),
+      measured,
     },
   };
 }
@@ -165,7 +196,7 @@ function buildTextChunks(state: TextVisualState, desiredResolution: number, text
       const view = new Text({ text, style, resolution: initialResolution });
       view.anchor.set(0, 0);
       const prefix = line.slice(0, startIndex);
-      const offset = prefix ? CanvasTextMetrics.measureText(prefix, base.style).width : 0;
+      const offset = prefix ? measurePixiText(prefix, base.style) : 0;
       view.position.set(lineStart + offset, base.y + lineIndex * measured.lineHeight);
       view.cullable = true;
       state.chunks.addChild(view);
@@ -174,7 +205,7 @@ function buildTextChunks(state: TextVisualState, desiredResolution: number, text
 
     graphemes.forEach((grapheme, index) => {
       const candidate = current + grapheme;
-      if (current && CanvasTextMetrics.measureText(candidate, base.style).width > maxChunkWidth) {
+      if (current && measurePixiText(candidate, base.style) > maxChunkWidth) {
         append(current, start);
         start = index;
         current = grapheme;
@@ -204,39 +235,54 @@ function createVectorVisual(node: Extract<EditorNode, { type: 'vector' }>): Cont
   return graphics;
 }
 
-function createImageVisual(node: Extract<EditorNode, { type: 'image' }>, view: NodeView): Container {
+function bindImageTexture(
+  view: NodeView,
+  sprite: Sprite,
+  src: string,
+  bucket: number,
+): void {
+  view.image?.release();
+  const lease = acquireImageTexture(src, bucket);
+  view.image = { bucket, key: lease.key, release: lease.release };
+  void lease.ready.then((loaded) => {
+    if (view.image?.key !== lease.key) return;
+    if (!loaded) {
+      sprite.visible = false;
+      view.invalidate();
+      return;
+    }
+    sprite.texture = loaded.texture;
+    if (view.source.type !== 'image') return;
+    const current = view.source;
+    const scaleX = current.width / loaded.width;
+    const scaleY = current.height / loaded.height;
+    if (current.objectFit === 'fill') {
+      sprite.scale.set(scaleX, scaleY);
+      sprite.position.set(current.x, current.y);
+    } else {
+      const scale = Math.max(scaleX, scaleY);
+      sprite.scale.set(scale);
+      sprite.position.set(
+        current.x + (current.width - loaded.width * scale) / 2,
+        current.y + (current.height - loaded.height * scale) / 2,
+      );
+    }
+    view.invalidate();
+  });
+}
+
+function createImageVisual(node: Extract<EditorNode, { type: 'image' }>, view: NodeView, zoom: number): Container {
   if (!node.src) {
     return new Graphics().rect(node.x, node.y, node.width, node.height)
       .fill('#e8e8e8').stroke({ color: '#c8c8c8', width: 1 });
   }
-  const image = new Image();
   const sprite = new Sprite(Texture.EMPTY);
   sprite.scale.set(node.width, node.height);
   sprite.position.set(node.x, node.y);
-  let texture: Texture | null = null;
-  const resize = () => {
-    if (!texture || view.source.type !== 'image') return;
-    const current = view.source;
-    const width = Math.max(1, texture.width);
-    const height = Math.max(1, texture.height);
-    const scale = Math.max(current.width / width, current.height / height);
-    sprite.scale.set(scale);
-    sprite.position.set(current.x + (current.width - width * scale) / 2, current.y + (current.height - height * scale) / 2);
-  };
-  image.onload = () => {
-    // Texture.from(string) only reads Pixi's Assets cache. Passing the loaded
-    // HTMLImageElement creates a real texture without a separate Assets call.
-    texture = Texture.from(image);
-    sprite.texture = texture;
-    resize();
-    view.invalidate();
-  };
-  image.onerror = () => { sprite.visible = false; };
-  image.src = node.src;
+  bindImageTexture(view, sprite, node.src, imageBucketForSize(node.width, node.height, zoom, window.devicePixelRatio || 1));
   view.cleanup = () => {
-    image.onload = null;
-    image.onerror = null;
-    texture?.destroy(true);
+    view.image?.release();
+    view.image = null;
   };
   return sprite;
 }
@@ -252,11 +298,11 @@ function createMask(node: EditorNode): Graphics {
   return graphics;
 }
 
-function createView(node: EditorNode, invalidate: () => void): NodeView {
+function createView(node: EditorNode, invalidate: () => void, viewport: Viewport): NodeView {
   const container = new Container({ label: node.id });
   container.cullable = true;
-  const view: NodeView = { source: node, container, visual: null, text: null, mask: null, cleanup: null, invalidate };
-  updateView(view, node, { forceRebuild: true });
+  const view: NodeView = { source: node, container, visual: null, text: null, mask: null, image: null, cleanup: null, invalidate };
+  updateView(view, node, { forceRebuild: true, viewport });
   return view;
 }
 
@@ -278,7 +324,7 @@ function isPureTranslation(previous: EditorNode, next: EditorNode): boolean {
 function updateView(
   view: NodeView,
   node: EditorNode,
-  { forceRebuild = false }: { forceRebuild?: boolean } = {},
+  { forceRebuild = false, viewport }: { forceRebuild?: boolean; viewport?: Viewport } = {},
 ): void {
   if (!forceRebuild && isPureTranslation(view.source, node)) {
     const dx = node.x - view.source.x;
@@ -323,7 +369,7 @@ function updateView(
     view.visual = visual;
     view.text = state;
   } else if (node.type === 'vector') view.visual = createVectorVisual(node);
-  else if (node.type === 'image') view.visual = createImageVisual(node, view);
+  else if (node.type === 'image') view.visual = createImageVisual(node, view, viewport?.zoom ?? 1);
   else view.visual = createShapeVisual(node);
   container.addChildAt(view.visual, 0);
 
@@ -347,7 +393,7 @@ function textTextureLimit(canvas: HTMLCanvasElement | null): number {
   return limit;
 }
 
-export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDelta, suppressedIds, onFallback }: PixiSceneProps) {
+export function PixiScene({ doc, change, viewport, editingId, panning, movingIds, moveDelta, suppressedIds, onFallback }: PixiSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragCanvasRef = useRef<HTMLCanvasElement>(null);
   const appRef = useRef<Application | null>(null);
@@ -370,7 +416,7 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
   const [ready, setReady] = useState(false);
   const movingSignature = movingIds.join('|');
   const fontSignature = useMemo(() => [...new Set(doc.nodes.flatMap((node) => node.type === 'text'
-    ? [`${node.fontWeight} ${node.fontSize}px ${node.fontFamily}`]
+    ? [`${node.fontWeight} ${node.fontSize}px ${fontFamilyWithFallback(node.fontFamily)}`]
     : []))].sort().join('|'), [doc.nodes]);
   const [loadedFontSignature, setLoadedFontSignature] = useState<string | null>(null);
 
@@ -379,6 +425,7 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
     world: Container,
     nextViewport: Viewport,
     targetCanvas: HTMLCanvasElement | null = canvasRef.current,
+    previewLod = false,
   ) => {
     window.clearTimeout(zoomTimerRef.current);
     zoomTimerRef.current = 0;
@@ -393,17 +440,27 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
     const screenWidth = canvas?.clientWidth ?? app.screen.width;
     const screenHeight = canvas?.clientHeight ?? app.screen.height;
     const textureLimit = textTextureLimit(canvas);
+    const overscan = previewOverscan(screenWidth, screenHeight);
     let rasterizedTextCount = 0;
     let chunkedTextCount = 0;
+    let culledTextCount = 0;
+    let lodTextCount = 0;
     for (const view of viewsRef.current.values()) {
+      if (view.source.type === 'image' && view.image && view.visual instanceof Sprite) {
+        const bucket = imageBucketForSize(view.source.width, view.source.height, nextViewport.zoom, window.devicePixelRatio || 1);
+        if (bucket !== view.image.bucket) bindImageTexture(view, view.visual, view.source.src, bucket);
+      }
       if (!view.text) continue;
       // A conservative screen-space circle includes every rotation. Offscreen
       // text keeps its old texture until it actually enters the viewport.
       const source = view.source;
       const centerX = (source.x + source.width / 2) * nextViewport.zoom + nextViewport.x;
       const centerY = (source.y + source.height / 2) * nextViewport.zoom + nextViewport.y;
-      const radius = Math.hypot(source.width, source.height) * nextViewport.zoom / 2 + 64;
-      if (centerX + radius < 0 || centerX - radius > screenWidth || centerY + radius < 0 || centerY - radius > screenHeight) continue;
+      const radius = Math.hypot(source.width, source.height) * nextViewport.zoom / 2 + overscan;
+      if (centerX + radius < 0 || centerX - radius > screenWidth || centerY + radius < 0 || centerY - radius > screenHeight) {
+        culledTextCount += 1;
+        continue;
+      }
       let current: Container | null = view.container;
       let displayed = true;
       while (current) {
@@ -414,6 +471,16 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
       if (!displayed) continue;
 
       const state = view.text;
+      if (previewLod && nextViewport.zoom <= 0.5) {
+        // LOD is limited to the transient drag preview. The next full render
+        // restores editable high-resolution text and never touches export.
+        state.greek.visible = true;
+        state.base.visible = false;
+        state.chunks.visible = false;
+        lodTextCount += 1;
+        continue;
+      }
+      state.greek.visible = false;
       const padding = state.base.style.padding * 2;
       const fullWidth = Math.ceil(state.measured.width + padding);
       const fullHeight = Math.ceil(state.measured.height + padding);
@@ -447,6 +514,13 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
       canvas.dataset.textResolution = String(textResolution);
       canvas.dataset.rasterizedText = String(rasterizedTextCount);
       canvas.dataset.chunkedText = String(chunkedTextCount);
+      canvas.dataset.culledText = String(culledTextCount);
+      canvas.dataset.lodText = String(lodTextCount);
+      const imageStats = imageTextureCacheStats();
+      canvas.dataset.imageCacheEntries = String(imageStats.entries);
+      canvas.dataset.imageCacheBytes = String(imageStats.bytes);
+      canvas.dataset.imageBuckets = [...new Set([...viewsRef.current.values()]
+        .filter((view) => view.image).map((view) => view.image!.bucket))].join(',');
     }
     renderedViewportRef.current = nextViewport;
     const started = performance.now();
@@ -472,7 +546,10 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
       document.fonts.load(font, 'Malewich Подтверждение 0123').catch(() => []),
     ) : [];
     void Promise.all(loads).then(() => {
-      if (!cancelled) setLoadedFontSignature(fontSignature);
+      if (!cancelled) {
+        invalidateTextLayoutCaches();
+        setLoadedFontSignature(fontSignature);
+      }
     });
     return () => { cancelled = true; };
   }, [fontSignature]);
@@ -542,8 +619,8 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
       if (previewRef.current && app && dragApp && worldRef.current && dragWorldRef.current) {
         const dragCanvas = dragCanvasRef.current;
         const transform = dragCanvas?.style.transform ?? '';
-        renderNow(app, worldRef.current, latestViewportRef.current);
-        renderNow(dragApp, dragWorldRef.current, latestViewportRef.current, dragCanvas);
+        renderNow(app, worldRef.current, latestViewportRef.current, canvasRef.current, true);
+        renderNow(dragApp, dragWorldRef.current, latestViewportRef.current, dragCanvas, true);
         if (dragCanvas) dragCanvas.style.transform = transform;
       } else {
         // Resizing clears WebGL. Coalesce it with other async invalidations.
@@ -576,6 +653,7 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
     const pageId = getActivePageId(doc);
     const pageScenes = pageScenesRef.current;
     let pageScene = pageScenes.get(pageId);
+    const structureChanged = change.full || change.structureChanged || !pageScene;
     if (!pageScene) {
       // Keep each visited page as a retained scene. Returning to a page must not
       // recreate thousands of Graphics and text textures; no bitmap root cache
@@ -603,16 +681,26 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
       dragCanvas.style.transform = '';
     }
 
-    const nextIds = new Set(doc.nodes.map((node) => node.id));
     const siblingIndexes = new Map<string, number>();
-    const siblingCounts = new Map<string | null, number>();
-    for (const node of doc.nodes) {
-      const index = siblingCounts.get(node.parentId) ?? 0;
-      siblingIndexes.set(node.id, index);
-      siblingCounts.set(node.parentId, index + 1);
-    }
-    for (const [id, view] of views) {
-      if (!nextIds.has(id)) {
+    if (structureChanged) {
+      const nextIds = new Set(doc.nodes.map((node) => node.id));
+      const siblingCounts = new Map<string | null, number>();
+      for (const node of doc.nodes) {
+        const index = siblingCounts.get(node.parentId) ?? 0;
+        siblingIndexes.set(node.id, index);
+        siblingCounts.set(node.parentId, index + 1);
+      }
+      for (const [id, view] of views) {
+        if (!nextIds.has(id)) {
+          view.cleanup?.();
+          view.container.destroy({ children: true });
+          views.delete(id);
+        }
+      }
+    } else {
+      for (const id of change.deletedIds) {
+        const view = views.get(id);
+        if (!view) continue;
         view.cleanup?.();
         view.container.destroy({ children: true });
         views.delete(id);
@@ -630,8 +718,8 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
       }
       dragCanvas.style.visibility = 'visible';
       dragCanvas.style.transform = '';
-      renderNow(app, world, viewport);
-      renderNow(dragApp, dragWorld, viewport, dragCanvas);
+      renderNow(app, world, viewport, canvasRef.current, true);
+      renderNow(dragApp, dragWorld, viewport, dragCanvas, true);
     }
 
     const invalidate = () => {
@@ -640,10 +728,10 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
     for (const node of doc.nodes) {
       let view = views.get(node.id);
       if (!view) {
-        view = createView(node, invalidate);
+        view = createView(node, invalidate, viewport);
         views.set(node.id, view);
-      } else if (view.source !== node) {
-        updateView(view, node);
+      } else if (view.source !== node && (structureChanged || change.changedIds.has(node.id))) {
+        updateView(view, node, { viewport });
       }
       const parent = preview?.ids.has(node.id)
         ? dragWorld
@@ -652,7 +740,7 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
         parent.addChild(view.container);
       }
     }
-    for (const node of preview ? [] : doc.nodes) {
+    for (const node of preview || !structureChanged ? [] : doc.nodes) {
       const view = views.get(node.id);
       const parentView = node.parentId ? views.get(node.parentId) : undefined;
       const parent = parentView?.container ?? world;
@@ -679,7 +767,7 @@ export function PixiScene({ doc, viewport, editingId, panning, movingIds, moveDe
     }
     renderNow(app, world, viewport);
     if (canvasRef.current) canvasRef.current.dataset.scenePage = pageId;
-  }, [doc, fontSignature, loadedFontSignature, movingSignature, ready]);
+  }, [doc, change, fontSignature, loadedFontSignature, movingSignature, ready]);
 
   useEffect(() => {
     const dragCanvas = dragCanvasRef.current;
