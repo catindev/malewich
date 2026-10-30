@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlignCenter,
   AlignLeft,
@@ -169,12 +169,22 @@ export function Inspector({ hidden = false, theme, onToggleTheme }: InspectorPro
   const [devMode, setDevMode] = useState(false);
   const [mode, setMode] = useState<'design' | 'prototype'>('design');
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
-  const selectedNodes = selection.flatMap((id) => {
+  const selectionKey = selection.join('|');
+  const selectedNodes = useMemo(() => selection.flatMap((id) => {
     const node = getNode(doc, id);
     return node ? [node] : [];
-  });
+  }), [doc, selectionKey]);
   const node = selectedNodes.length === 1 ? selectedNodes[0] : undefined;
-  const parentNode = node?.parentId ? getNode(doc, node.parentId) : undefined;
+  const parentNode = useMemo(() => node?.parentId ? getNode(doc, node.parentId) : undefined, [doc, node?.parentId]);
+  const prototypeTargets = useMemo(() => doc.nodes.filter((candidate) =>
+    candidate.type === 'frame' && candidate.parentId === null && candidate.id !== node?.id,
+  ), [doc.nodes, node?.id]);
+  const variants = useMemo(() => node?.variantSetId ? doc.nodes.filter((candidate) =>
+    candidate.variantSetId === node.variantSetId && candidate.component?.role === 'main' && candidate.id === candidate.component.rootId,
+  ) : [], [doc.nodes, node?.variantSetId]);
+  const instanceRoot = useMemo(() => node?.component?.role === 'instance' ? doc.nodes.find((candidate) =>
+    candidate.component?.role === 'instance' && candidate.component.rootId === node.component!.rootId && candidate.component.sourceId === candidate.component.rootId,
+  ) : undefined, [doc.nodes, node?.component?.rootId]);
   const activePageId = getActivePageId(doc);
   const activePage = getDocumentPages(doc).find((page) => page.id === activePageId);
   const updateTextProperties = (patch: Partial<TextNode>) => {
@@ -193,7 +203,7 @@ export function Inspector({ hidden = false, theme, onToggleTheme }: InspectorPro
   const renderPrototypeSection = () => {
     if (!node || node.type !== 'frame') return null;
     const link = (doc.prototypeLinks ?? []).find((item) => item.sourceFrameId === node.id);
-    const targets = doc.nodes.filter((candidate) => candidate.type === 'frame' && candidate.parentId === null && candidate.id !== node.id);
+    const targets = prototypeTargets;
     return (
       <PropertySection title="Взаимодействие" className="prototype-properties">
         <label className="inspector-field-label" htmlFor="prototype-target">Переход к экрану</label>
@@ -380,8 +390,6 @@ export function Inspector({ hidden = false, theme, onToggleTheme }: InspectorPro
               {node.component?.role === 'instance' && (
                 <>
                   {node.variantSetId && (() => {
-                    const variants = doc.nodes.filter((candidate) => candidate.variantSetId === node.variantSetId && candidate.component?.role === 'main' && candidate.id === candidate.component.rootId);
-                    const instanceRoot = doc.nodes.find((candidate) => candidate.component?.role === 'instance' && candidate.component.rootId === node.component!.rootId && candidate.component.sourceId === candidate.component.rootId);
                     return (
                       <select
                         className="font-select" aria-label="Вариант компонента" value={node.component!.rootId}

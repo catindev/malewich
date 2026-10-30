@@ -11,6 +11,7 @@
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.3.0",
     "@fontsource/manrope": "^5.3.0",
     "@open-pencil/fig": "^0.16.0",
     "@open-pencil/kiwi": "^0.16.0",

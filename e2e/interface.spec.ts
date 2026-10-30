@@ -97,6 +97,22 @@ test('expands and scrolls the layer tree to a canvas selection', async ({ page }
   })).toBe(true);
 });
 
+test('virtualizes a large layer list while keeping every row reachable', async ({ page }) => {
+  const nodes = Array.from({ length: 800 }, (_, index) => ({
+    ...base(`layer-${index}`, `Layer ${index}`, 0, 0, 100, 100),
+    type: 'rectangle', fill: '#7357ff', cornerRadius: 0,
+  }));
+  await seed(page, nodes);
+  await expect(page.locator('.layers-tree')).toHaveAttribute('data-layer-count', '800');
+  expect(await page.locator('.layer-row').count()).toBeLessThan(100);
+  await expect(page.locator('[data-layer-id="layer-799"]')).toBeVisible();
+  await page.locator('.layers-tree').evaluate((tree) => { tree.scrollTop = tree.scrollHeight; });
+  await expect(page.locator('[data-layer-id="layer-0"]')).toBeVisible();
+  await expect(page.locator('[data-layer-id="layer-799"]')).toHaveCount(0);
+  await page.locator('[data-layer-id="layer-0"]').click();
+  await expect(page.locator('[data-layer-id="layer-0"]')).toHaveClass(/is-selected/);
+});
+
 test('shows component and Auto Layout identity in layers and inspector', async ({ page }) => {
   const layout = {
     ...frame('card', 'Card'),

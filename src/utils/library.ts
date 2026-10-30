@@ -84,11 +84,11 @@ export function deleteStyle(doc: DesignDocument, styleId: string): DesignDocumen
   return {
     ...doc,
     styles: (doc.styles ?? []).filter((style) => style.id !== styleId),
-    nodes: doc.nodes.map((node) => ({
+    nodes: doc.nodes.map((node) => node.fillStyleId === styleId || node.textStyleId === styleId ? {
       ...node,
       fillStyleId: node.fillStyleId === styleId ? undefined : node.fillStyleId,
       textStyleId: node.textStyleId === styleId ? undefined : node.textStyleId,
-    })),
+    } : node),
   };
 }
 
@@ -245,7 +245,7 @@ export function deleteVariable(doc: DesignDocument, variableId: string): DesignD
     ...doc,
     variables: (doc.variables ?? []).filter((variable) => variable.id !== variableId),
     nodes: doc.nodes.map((node) => {
-      if (!node.variableBindings) return node;
+      if (!node.variableBindings || !Object.values(node.variableBindings).includes(variableId)) return node;
       const variableBindings = Object.fromEntries(Object.entries(node.variableBindings).filter(([, id]) => id !== variableId));
       return { ...node, variableBindings: Object.keys(variableBindings).length > 0 ? variableBindings : undefined };
     }),

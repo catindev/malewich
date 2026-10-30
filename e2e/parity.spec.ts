@@ -23,7 +23,7 @@ async function seed(page: Page, nodes: TestNode[]) {
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), nodes,
   };
   await page.addInitScript((document) => {
-    localStorage.setItem('forma:document:v1', JSON.stringify(document));
+    localStorage.setItem('malewich:document:v1', JSON.stringify(document));
   }, doc);
   await page.goto('/?hitLayer=1');
   await expect(page.locator('.editor-svg')).toBeVisible();

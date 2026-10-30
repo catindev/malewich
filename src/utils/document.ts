@@ -112,6 +112,11 @@ export function isDocumentContentEqual(left: DesignDocument, right: DesignDocume
   return equalSerializableValues(left, right);
 }
 
+/** Preserve object identity when a derived pass returns the same node values. */
+export function isEditorNodeEqual(left: EditorNode, right: EditorNode): boolean {
+  return left === right || equalSerializableValues(left, right);
+}
+
 function getDocumentIndex(doc: DesignDocument): DocumentIndex {
   const cached = documentIndexes.get(doc);
   if (cached) return cached;

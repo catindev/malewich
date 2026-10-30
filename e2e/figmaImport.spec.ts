@@ -1,7 +1,40 @@
 import { expect, test } from '@playwright/test';
+import { fileURLToPath } from 'node:url';
 
-const fixturePath = new URL('./fixtures/TCB.PAY.fig', import.meta.url).pathname;
-const smzFixturePath = new URL('./fixtures/TCB.PAY.SMZ.fig', import.meta.url).pathname;
+const fixturePath = fileURLToPath(new URL('./fixtures/TCB.PAY.fig', import.meta.url));
+const smzFixturePath = fileURLToPath(new URL('./fixtures/TCB.PAY.SMZ.fig', import.meta.url));
+const uiPrepButtonsFixturePath = fileURLToPath(new URL('./fixtures/UI Prep.Buttons.fig', import.meta.url));
+const uiPrepCoverFixturePath = fileURLToPath(new URL('./fixtures/UI Prep.Cover.fig', import.meta.url));
+const globbbFixturePath = fileURLToPath(new URL('./fixtures/Globbb.Pages.fig', import.meta.url));
+
+async function pngPixel(page: import('@playwright/test').Page, png: Buffer, x: number, y: number) {
+  return page.evaluate(async ({ data, px, py }) => {
+    const image = new Image();
+    image.src = `data:image/png;base64,${data}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d')!;
+    context.drawImage(image, 0, 0);
+    return [...context.getImageData(px, py, 1, 1).data];
+  }, { data: png.toString('base64'), px: x, py: y });
+}
+
+async function revealLayer(page: import('@playwright/test').Page, id: string) {
+  await page.locator('.layers-tree').evaluate(async (tree, layerId) => {
+    if (tree.querySelector(`[data-layer-id="${layerId}"]`)) return;
+    for (let top = 0; top <= tree.scrollHeight; top += Math.max(1, tree.clientHeight)) {
+      tree.scrollTop = top;
+      const visible = await new Promise<boolean>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(Boolean(tree.querySelector(`[data-layer-id="${layerId}"]`)))));
+      });
+      if (visible) return;
+    }
+    throw new Error(`Layer ${layerId} is not reachable in the virtualized list`);
+  }, id);
+  await expect(page.locator(`[data-layer-id="${id}"]`)).toBeVisible();
+}
 
 test('imports TCB.PAY as editable vectors, text, components and variables', async ({ page }, testInfo) => {
   test.setTimeout(90_000);
@@ -13,7 +46,8 @@ test('imports TCB.PAY as editable vectors, text, components and variables', asyn
   await expect(page.locator('.document-title')).toHaveValue('TCB.PAY', { timeout: 30_000 });
   await expect(page.locator('.brand-name')).toHaveText('Малевич');
   await expect(page.locator('.count-badge')).toHaveText('2325');
-  await expect(page.locator('.layer-row')).toHaveCount(55);
+  await expect(page.locator('.layers-tree')).toHaveAttribute('data-layer-count', '55');
+  expect(await page.locator('.layer-row').count()).toBeLessThan(55);
   await expect(page.locator('[data-renderer="webgl"]')).toBeVisible();
   await expect(page.locator('.scene-node--text')).toHaveCount(599);
   await expect(page.locator('.scene-node--vector')).toHaveCount(671);
@@ -39,6 +73,7 @@ test('imports TCB.PAY as editable vectors, text, components and variables', asyn
   await page.locator('.canvas-mode-hint').evaluate((hint) => { hint.style.visibility = ''; });
   await page.screenshot({ path: testInfo.outputPath('tcb-pay-full.png'), animations: 'disabled' });
 
+  await revealLayer(page, 'fig-0-253');
   await page.locator('[data-layer-id="fig-0-253"]').click();
   await page.locator('.zoom-value').click();
   await page.getByRole('button', { name: /Вписать выделение/ }).click();
@@ -46,8 +81,10 @@ test('imports TCB.PAY as editable vectors, text, components and variables', asyn
   await page.screenshot({ path: testInfo.outputPath('tcb-pay-first-screen.png'), animations: 'disabled' });
 
   for (const id of ['fig-0-4', 'fig-0-52', 'fig-0-53']) {
+    await revealLayer(page, id);
     await page.locator(`[data-layer-id="${id}"] .layer-disclosure`).click();
   }
+  await revealLayer(page, 'fig-0-804');
   await page.locator('[data-layer-id="fig-0-804"]').click();
   await expect(page.locator('.component-status')).toContainText('Instance');
   await page.reload();
@@ -95,6 +132,7 @@ test('shows the second SMZ page and presents its selected screen', async ({ page
   await expect(page.locator('.count-badge')).toHaveText('2149');
   await expect(page.locator('.pixi-scene')).toHaveAttribute('data-scene-page', 'fig-page-1');
   await expect(page.locator('.zoom-value')).not.toHaveText('100%');
+  await revealLayer(page, 'fig-0-993');
   await page.locator('[data-layer-id="fig-0-993"]').click();
   await page.getByRole('button', { name: 'Презентация' }).click();
   await expect(page.locator('.prototype-frame')).toHaveAttribute('aria-label', '00. Первая проверка');
@@ -115,12 +153,83 @@ test('shows the second SMZ page and presents its selected screen', async ({ page
   expect(errors).toEqual([]);
 });
 
-test('text editing has one outline and migrates a legacy Forma snapshot', async ({ page }, testInfo) => {
+test('imports UI Prep embedded images and falls back from SF Pro Text to local Inter', async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/?renderer=svg');
+  await page.locator('input[type="file"][accept*=".fig"]').setInputFiles(uiPrepButtonsFixturePath);
+  await expect(page.locator('.document-title')).toHaveValue('UI Prep.Buttons', { timeout: 30_000 });
+  await expect(page.locator('.count-badge')).toHaveText('210');
+  await expect(page.locator('.scene-node--text')).toHaveCount(40);
+  await expect(page.locator('.scene-node--image')).toHaveCount(3);
+  const fontFamilies = await page.locator('.scene-node--text text').evaluateAll((nodes) =>
+    nodes.map((node) => node.getAttribute('font-family')));
+  expect(new Set(fontFamilies)).toEqual(new Set(['SF Pro Text, Inter, Arial, sans-serif']));
+  await page.evaluate(() => document.fonts.ready);
+  expect(await page.evaluate(() => document.fonts.check('500 16px Inter'))).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('ui-prep-buttons-svg.png'), animations: 'disabled' });
+  await expect(page.locator('.save-indicator')).toContainText('Сохранено локально', { timeout: 30_000 });
+
+  await page.goto('/?hitLayer=1');
+  await expect(page.locator('.document-title')).toHaveValue('UI Prep.Buttons', { timeout: 30_000 });
+  await expect(page.locator('.zoom-value')).not.toHaveText('100%');
+  await expect(page.locator('.scene-node--text')).toHaveCount(40);
+  await expect(page.locator('.scene-node--image')).toHaveCount(3);
+  await expect.poll(() => page.locator('.pixi-scene').getAttribute('data-image-cache-bytes').then(Number)).toBeGreaterThan(0);
+  const buttonsImageCacheBytes = Number(await page.locator('.pixi-scene').getAttribute('data-image-cache-bytes'));
+  await page.screenshot({ path: testInfo.outputPath('ui-prep-buttons.png'), animations: 'disabled' });
+
+  await page.locator('input[type="file"][accept*=".fig"]').setInputFiles(uiPrepCoverFixturePath);
+  await expect(page.locator('.document-title')).toHaveValue('UI Prep.Cover', { timeout: 30_000 });
+  await expect(page.locator('.zoom-value')).not.toHaveText('100%');
+  await expect(page.locator('.count-badge')).toHaveText('1');
+  await expect(page.locator('.scene-node--image')).toHaveCount(1);
+  await expect.poll(() => page.locator('.pixi-scene').getAttribute('data-image-cache-bytes').then(Number)).toBeGreaterThan(buttonsImageCacheBytes);
+  await page.locator('.editor-svg').evaluate((svg) => { svg.style.visibility = 'hidden'; });
+  await page.locator('.canvas-grid').evaluate((grid) => { grid.style.visibility = 'hidden'; });
+  const cover = await page.locator('.pixi-scene').screenshot({ path: testInfo.outputPath('ui-prep-cover.png'), animations: 'disabled' });
+  expect(cover.byteLength).toBeGreaterThan(30_000);
+  await page.locator('.editor-svg').evaluate((svg) => { svg.style.visibility = ''; });
+  await page.locator('.canvas-grid').evaluate((grid) => { grid.style.visibility = ''; });
+  await expect(page.locator('.save-indicator')).toContainText('Сохранено локально', { timeout: 30_000 });
+  await page.reload();
+  await expect(page.locator('.document-title')).toHaveValue('UI Prep.Cover', { timeout: 30_000 });
+  await expect(page.locator('.zoom-value')).not.toHaveText('100%');
+  await expect(page.locator('.scene-node--image')).toHaveCount(1);
+  expect(errors).toEqual([]);
+});
+
+test('renders Globbb reflected illustrations with preserved vector geometry', async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/?hitLayer=1');
+  await page.locator('input[type="file"][accept*=".fig"]').setInputFiles(globbbFixturePath);
+  await expect(page.locator('.document-title')).toHaveValue('Globbb.Pages', { timeout: 30_000 });
+  await expect(page.locator('.count-badge')).toHaveText('95');
+  await expect(page.locator('.scene-node--vector')).toHaveCount(56);
+  const pictureTransform = await page.locator('[data-node-id="fig-0-45"]').getAttribute('transform');
+  const vectorTransform = await page.locator('[data-node-id="fig-0-98"]').getAttribute('transform');
+  expect(pictureTransform?.startsWith('matrix(-')).toBe(true);
+  expect(vectorTransform?.startsWith('matrix(-')).toBe(true);
+  await page.evaluate(() => document.fonts.ready);
+  await page.locator('.editor-svg').evaluate((svg) => { svg.style.visibility = 'hidden'; });
+  await page.locator('.canvas-grid').evaluate((grid) => { grid.style.visibility = 'hidden'; });
+  const canvas = await page.locator('.pixi-scene').screenshot({ path: testInfo.outputPath('globbb-pages.png'), animations: 'disabled' });
+  // Solid interiors from the reference: the reflected brain and the rotated arm.
+  // Both points were background before their world transforms were corrected.
+  expect(await pngPixel(page, canvas, 480, 430)).toEqual([230, 161, 200, 255]);
+  expect(await pngPixel(page, canvas, 190, 440)).toEqual([178, 190, 131, 255]);
+  expect(errors).toEqual([]);
+});
+
+test('text editing has one outline and restores a current snapshot', async ({ page }, testInfo) => {
   const now = new Date().toISOString();
   const doc = {
-    version: 1, id: 'legacy-forma', name: 'Legacy project', createdAt: now, updatedAt: now,
+    version: 1, id: 'current-snapshot', name: 'Current project', createdAt: now, updatedAt: now,
     nodes: [{
-      id: 'legacy-text', type: 'text', name: 'Legacy text', x: 0, y: 0, width: 360, height: 40,
+      id: 'current-text', type: 'text', name: 'Current text', x: 0, y: 0, width: 360, height: 40,
       rotation: 0, opacity: 1, visible: true, locked: false, parentId: null,
       fill: '#202020', stroke: 'transparent', strokeWidth: 0, text: 'Редактируемый текст',
       fontSize: 24, fontFamily: 'Manrope', fontWeight: 500, lineHeight: 1.2, letterSpacing: 0,
@@ -128,13 +237,11 @@ test('text editing has one outline and migrates a legacy Forma snapshot', async 
     }],
   };
   await page.addInitScript((document) => {
-    if (!localStorage.getItem('malewich:document:v1')) {
-      localStorage.setItem('forma:document:v1', JSON.stringify(document));
-    }
+    localStorage.setItem('malewich:document:v1', JSON.stringify(document));
   }, doc);
   await page.goto('/?hitLayer=1');
-  await expect(page.locator('.document-title')).toHaveValue('Legacy project');
-  await page.locator('[data-node-id="legacy-text"]').dblclick();
+  await expect(page.locator('.document-title')).toHaveValue('Current project');
+  await page.locator('[data-node-id="current-text"]').dblclick();
   await expect(page.locator('.canvas-text-editor')).toBeVisible();
   await expect(page.locator('.selection-overlay .selection')).toHaveCount(0);
   await expect(page.locator('.selection-overlay .resize-handle')).toHaveCount(0);
@@ -148,12 +255,8 @@ test('text editing has one outline and migrates a legacy Forma snapshot', async 
   await expect(page.locator('.layer-name')).toContainText('Текст изменён в Malewich');
   await expect(page.locator('.save-indicator')).toContainText('Сохранено локально');
 
-  const migration = await page.evaluate(() => ({
-    current: localStorage.getItem('malewich:document:v1'),
-    legacy: localStorage.getItem('forma:document:v1'),
-  }));
-  expect(migration.current).toContain('Legacy project');
-  expect(migration.legacy).toBeNull();
+  const current = await page.evaluate(() => localStorage.getItem('malewich:document:v1'));
+  expect(current).toContain('Current project');
   await page.reload();
   await expect(page.locator('.layer-name')).toContainText('Текст изменён в Malewich');
 });

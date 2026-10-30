@@ -4,9 +4,9 @@
 
 ## 1. Продуктовая рамка
 
-Malewich начинался как Forma — локальный браузерный редактор интерфейсов, а не облачный клон Figma. Основная идея: открыть макет, сохранить его редактируемость, дать знакомые средства проектирования и не требовать сервер.
+Malewich — локальный браузерный редактор интерфейсов, а не облачная платформа совместной работы. Основная идея: открыть макет, сохранить его редактируемость, дать знакомые средства проектирования и не требовать сервер.
 
-При переименовании в Malewich было важно сохранить данные пользователей. Поэтому storage поддерживает миграцию `forma-editor` и `forma:document:v1`, а импорт принимает старые `.forma.json`. Текущие ключи и экспорт используют имя Malewich.
+Документ хранится в текущих ключах `malewich-editor` и `malewich:document:v1`, а экспорт использует `*.malewich.json`. Отдельная миграция устаревших хранилищ больше не выполняется.
 
 Принцип, который сохранялся на всех этапах:
 
@@ -54,14 +54,17 @@ Auto Layout был реализован как scoped resolver, а не как C
 
 ## 4. Figma import: редактируемость важнее плоского изображения
 
-Для бинарных `.fig` использованы `@open-pencil/fig`, `@open-pencil/kiwi` и `@open-pencil/scene-graph`. Figma API и облачный доступ не нужны.
+Для бинарных `.fig` использованы независимые Kiwi decoder и SceneGraph. Figma API и облачный доступ не нужны.
 
 На реальном `TCB.PAY.fig` проверены 2 325 слоёв: 599 текстов, 671 vector, 691 Auto Layout, 26 main components, 176 instances, 122 переменные и 6 коллекций. Слои остаются отдельными объектами.
 
 ### Решения по визуальной точности
 
 - Локальная page-space геометрия сохраняется при открытии через `preserveSavedGeometry`.
-- Manrope поставляется локально и загружается через FontFaceSet до создания Pixi text textures.
+- Manrope и Inter поставляются локально и загружаются через FontFaceSet до создания Pixi text textures. Source family не подменяется в документе: общий stack `source → Inter → Arial → sans-serif` одинаково участвует в measurement, WebGL/SVG, редакторе и export, поэтому отсутствие системного `SF Pro Text` не меняет renderer на случайный системный шрифт.
+- `graph.getAbsolutePosition()` включает собственные и родительские rotation/flip. Для Malewich с абсолютной нетрансформированной layout-геометрией его нельзя копировать вместе с этими flags: трансформация применится повторно. Импорт суммирует только локальные translations предков, а для одиночного flip меняет знак rotation, поскольку Figma использует flip → rotation, а общая matrix редактора — rotation → flip.
+- Embedded `IMAGE` paints преобразуются в data URL только для поддержанных листовых frame/rectangle shapes и только при наличии bytes. `FILL` и `STRETCH` различаются как `cover` и `fill` во всех renderer/export; это не растеризация поддерева и не обещание произвольных image containers.
+- Fit нового документа зависит от `doc.id`, а не только от `activePageId`: разные FIG часто используют одинаковый `fig-page-0`. `loadDocument` не сбрасывает viewport перед layout effect, поэтому async IndexedDB hydration не отменяет уже выполненный fit повторным reset на 100%.
 - SVG vector paths сохраняют собственные fill/stroke/fill-rule. В WebGL closed contours дополнительно группируются по вложенности и фактическому winding: Pixi 8 иначе не вырезает holes у `nonzero` и зависит от порядка subpaths. Это исправляет внутренний вырез буквы «б» ТКБ без изменения сохранённой редактируемой геометрии.
 - Expanded `strokeGeometry` заливается paint без повторной обводки.
 - Если derived fill/stroke geometry отсутствует, `vectorNetwork` преобразуется в SVG curves и open segments; прямоугольная заглушка не подменяет иконку.
@@ -70,7 +73,7 @@ Auto Layout был реализован как scoped resolver, а не как C
 
 ### Осознанные ограничения
 
-Нельзя заявлять полную Figma parity. Gradients, произвольные image fills, effects, маски, mixed text runs и все правила Variant sets не считаются полностью поддержанными. Проверенный TCB.PAY не доказывает корректность любого `.fig`.
+Нельзя заявлять полную Figma parity. Gradients, image fills на векторах и контейнерах с детьми, `CROP`/`TILE`, произвольный `imageTransform`, effects, маски, mixed text runs и все правила Variant sets не считаются полностью поддержанными. Проверенные TCB.PAY, UI Prep и Globbb не доказывают корректность любого `.fig`.
 
 Служебные frame labels нельзя удалять только из-за кажущегося дублирования: в исходном макете могут быть собственные текстовые заголовки рядом с фреймами.
 
@@ -78,18 +81,14 @@ Auto Layout был реализован как scoped resolver, а не как C
 
 Большой импортированный макет показал предел DOM renderer: 54 126 DOM-элементов, медленный selection и pan. После перехода на retained WebGL диагностический DOM сократился примерно до 1 196 элементов, а сценарии стали заметно быстрее.
 
-### Почему Pixi, а не немедленный CanvasKit/Skia
+### Почему retained PixiJS
 
-Изучался OpenPencil: Vue 3, CanvasKit/Skia WASM, WebGPU, Yoga WASM и tile scheduler. Переносить весь стек означало бы заменить renderer, layout и значительную часть инфраструктуры без гарантии решения измеренных проблем.
-
-Было решено сохранить PixiJS и перенести принципы:
+Замена renderer, layout и значительной части инфраструктуры одновременно не решала бы измеренные проблемы автоматически. Было решено сохранить PixiJS и развивать существующую модель:
 
 - отдельная инвалидация transient preview и полной сцены;
 - retained resources вместо пересоздания;
 - отложенный финальный render;
 - профилирование перед оптимизацией.
-
-Исследованный OpenPencil checkout: `db794df33c27ce99e0bb0a22c7fb733ab72bcd38`. Источник: <https://github.com/open-pencil/open-pencil>.
 
 ### Ошибки перехода и их исправления
 
@@ -137,18 +136,16 @@ Zoom-dependent текстуры сделали буквы резкими, но �
 
 При этой проверке важен выбор координаты: центр text bounds на крайнем zoom может попасть в пробел между буквами и дать закономерно пустой кадр. Поэтому сначала на 400% находится реальный закрашенный pixel с закрашенными соседями, затем его мировая координата становится anchor для 25 600%. Наличие scene graph, отсутствие JS errors или успешный `app.render()` сами по себе не доказывают видимый результат.
 
-### Повторный разбор OpenPencil: scheduling и derived work
+### Повторный разбор scheduling и derived work
 
-Поверх уже перенесённых transient preview и раздельной инвалидации были повторно прочитаны `packages/vue/src/canvas/surface/render-loop.ts`, `packages/core/src/canvas/renderer/retained-backing.ts`, `renderer/tiles/{scheduler,planner,controller}.ts`, `editor/graph-events.ts` и text/resource caches на checkout `db794df33c27ce99e0bb0a22c7fb733ab72bcd38`.
-
-Перенесены только подходящие Pixi-архитектуре принципы:
+Поверх transient preview и раздельной инвалидации были закреплены следующие решения:
 
 - асинхронные image/editing/resize invalidations запрашивают один общий rAF, без постоянного ticker и без debounce resize;
 - font signature вычисляется по `doc.nodes`, а не на каждом zoom-only React render;
 - `getPageDocument()` хранит projections в WeakMap по immutable document и `pageId`, поэтому EditorCanvas, Topbar, Inspector и LayersPanel не повторяют один обход;
 - `commit()` сразу выходит при возврате прежнего document, а `commit()`/`recordSnapshot()` заменяют double `JSON.stringify` на `isDocumentContentEqual()` со сравнением serializable values и reference short-circuiting. В реальном edit обычно достаточно различия `updatedAt`; одинаковая ссылка не обходится вообще. JSON semantics для `undefined` object properties сохранены.
 
-Tile scheduler, overscan root bitmap и CanvasKit paragraph/path caches не копировались. Первые два требуют иной модели покрытия, повторной растеризации и аккуратного mask/transform compositing; последние уже имеют аналоги в retained Pixi textures и Graphics. Ограниченные по весу кэши OpenPencil остаются полезным ориентиром, но без измеренной проблемы памяти не добавлены.
+Корневой bitmap и tile scheduler не используются: они требуют иной модели покрытия, повторной растеризации и аккуратного mask/transform compositing. Ограниченные resource caches добавляются только там, где подтверждена польза и есть проверка инвалидации.
 
 В корректном SMZ-профиле после ожидания 2 328/2 149 слоёв double stringify 3 МБ документа занимал около 19–22 мс, а сравнение изменённого snapshot стало ниже разрешения таймера. Повторные projections после первого обращения не выполняют обход. Zoom-профиль остался в пределах 61–66 мс на wheel step с compositor preview. Полное сравнение одинаковых глубоких клонов не выдаётся за ускорение: это редкий путь, основной выигрыш относится к no-op по ссылке и реальным изменённым документам.
 
@@ -233,7 +230,7 @@ Descendants уже связаны с корнем через `parentId`. Дуб�
 ### Перед изменением документной модели
 
 1. Проверить pages, components, Auto Layout, export и storage одновременно.
-2. Сохранить старые JSON и Forma migration.
+2. Сохранить текущий JSON формата Malewich.
 3. Разделить полный документ и active-page projection.
 4. Добавить тест на изоляцию страниц и историю команд.
 
@@ -251,7 +248,21 @@ Descendants уже связаны с корнем через `parentId`. Дуб�
 3. Не считать успешный render по наличию scene graph: проверять пиксели.
 4. Не жертвовать визуальной точностью без явного transient-only компромисса и финального полного кадра.
 
-## 11. Регрессионный ориентир
+## 11. DocumentChange, ресурсы и виртуализация
+
+Следующий этап оптимизации начался с единого `DocumentChange` на границе Zustand. Он содержит revision, changed/deleted IDs, изменённые свойства, структурный признак и pure translation. Renderer обновляет только эти узлы и пересчитывает sibling order лишь при изменении структуры. Auto Layout и component sync возвращают прежние object references при равенстве значений, чтобы derived pass не создавал ложных изменений. Inspector и selection memoize производные узлы и настройки по document snapshot и selection.
+
+Layers переведён на плоский список по `(document, page, collapsed)` и DOM только для видимых строк с небольшим overscan. Полный размер доступен через `data-layer-count`; scroll-into-view, rename, drag/drop и context menu сохранены. Это не просто мемоизация всех строк: теперь большое дерево не создаётся целиком в React/DOM.
+
+Text measurement и wrapping кэшируются в design-space, измерения Pixi-фрагментов — отдельно от resolution. Загрузка шрифта повышает font generation и инвалидирует обе группы caches. Low-detail текст разрешён только как transient preview во время drag при zoom до 50%; release всегда восстанавливает полный кадр. Adaptive overscan зависит от viewport и ограничен 128 px.
+
+Изображения используют общий cache `src + display bucket`. Меньшие bitmap создаются через `createImageBitmap` с canvas fallback, resolution повышается по мере zoom, а одинаковые src делят texture. LRU ограничен 128 МБ и 64 записями, но не вытесняет ресурсы с активными пользователями. Export продолжает работать с документом, а не с уменьшенной canvas-копией.
+
+Сохранение больше не выполняет повторную сериализацию резервного JSON. Устаревшая миграция хранилищ удалена; поддерживаются только текущие IndexedDB и localStorage форматы Malewich.
+
+Прогрессивная покадровая сборка страниц не внедрена. Холодный импорт включает декодирование и шрифты, а retained page scenes уже устраняют повторное создание при возврате и отменяют устаревшие клики. Разбиение дерева на промежуточные состояния добавило бы сложность и работу без доказанного улучшения. Raster damage и корневой RenderTexture по-прежнему не используются.
+
+## 12. Регрессионный ориентир
 
 На момент initial public snapshot:
 
@@ -262,6 +273,6 @@ Descendants уже связаны с корнем через `parentId`. Дуб�
 - nested move pixel equality;
 - страницы, группы, Presentation, themes, selection scroll и CSS highlighting.
 
-Текущий проверенный контур: **84 unit-теста**, **53 browser-сценария** и production TypeScript/Vite build. Дополнительно он включает deferred root commit и live frame labels, invariance instances при main translation, nested Layers display updates, object operations/export, text tiling на 6400% и canvas-only pixel/hit-target alignment в старой и новооткрытой области.
+Текущий проверенный контур: **96 unit-тестов**, **58 browser-сценариев** и production TypeScript/Vite build. Дополнительно он включает DocumentChange и identity, виртуализацию 800 строк с доступностью последней, text layout/font generation, transient LOD с восстановлением полного кадра, shared downsampled image textures 512→2048, deferred root commit и live frame labels, invariance instances при main translation, nested Layers display updates, object operations/export, text tiling на 6400% и canvas-only pixel/hit-target alignment в старой и новооткрытой области. Community fixtures проверяют UI Prep embedded images + Inter + fit/reload и Globbb affine transforms с известными RGBA-пикселями; полные исходные файлы также открыты в WebGL/SVG и после reload.
 
 Количество тестов должно расти вместе с функциональностью. Обновляйте README, CHANGELOG, UX_AUDIT и эту историю только фактически проверенными сведениями.

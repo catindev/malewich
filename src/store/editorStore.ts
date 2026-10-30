@@ -56,6 +56,7 @@ import {
   getDocumentPages,
   getPageRoots,
 } from '../utils/pages';
+import { deriveDocumentChange, EMPTY_DOCUMENT_CHANGE, type DocumentChange } from '../utils/documentChanges';
 
 const HISTORY_LIMIT = 100;
 const initialDocument = applyAutoLayout(syncComponents(resolveVariables(loadStoredDocument() ?? createWelcomeDocument())));
@@ -75,6 +76,7 @@ interface ClipboardData {
 
 interface EditorState {
   doc: DesignDocument;
+  change: DocumentChange;
   past: DesignDocument[];
   future: DesignDocument[];
   selection: string[];
@@ -284,8 +286,17 @@ function cleanSelection(doc: DesignDocument, selection: string[]): string[] {
   return selection.filter((id) => Boolean(getNode(doc, id)));
 }
 
-export const useEditorStore = create<EditorState>((set) => ({
+export const useEditorStore = create<EditorState>((set) => {
+  const update: typeof set = (partial) => set((state) => {
+    const next = typeof partial === 'function' ? partial(state) : partial;
+    if (next.doc && next.doc !== state.doc) {
+      return { ...next, change: deriveDocumentChange(state.doc, next.doc) };
+    }
+    return next;
+  });
+  return {
   doc: initialDocument,
+  change: EMPTY_DOCUMENT_CHANGE,
   past: [],
   future: [],
   selection: [],
@@ -293,11 +304,11 @@ export const useEditorStore = create<EditorState>((set) => ({
   viewport: { x: 100, y: 70, zoom: 1 },
   saveState: 'saved',
   clipboard: null,
-  setTool: (tool) => set({ tool }),
-  setViewport: (viewport) => set({ viewport }),
-  setSelection: (selection) => set({ selection }),
-  setSaveState: (saveState) => set({ saveState }),
-  commit: (updater) => set((state) => {
+  setTool: (tool) => update({ tool }),
+  setViewport: (viewport) => update({ viewport }),
+  setSelection: (selection) => update({ selection }),
+  setSaveState: (saveState) => update({ saveState }),
+  commit: (updater) => update((state) => {
     const input = updater(state.doc);
     if (input === state.doc) return state;
     const next = withTimestamp(input, state.doc);
@@ -309,10 +320,10 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: cleanSelection(next, state.selection),
     };
   }),
-  transient: (updater, options) => set((state) => ({
+  transient: (updater, options) => update((state) => ({
     doc: withTimestamp(updater(state.doc), state.doc, options),
   })),
-  recordSnapshot: (snapshot) => set((state) => {
+  recordSnapshot: (snapshot) => update((state) => {
     if (snapshot === state.doc || isDocumentContentEqual(snapshot, state.doc)) return state;
     return {
       past: [...state.past.slice(-HISTORY_LIMIT + 1), snapshot],
@@ -320,7 +331,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: cleanSelection(state.doc, state.selection),
     };
   }),
-  addNode: (node) => set((state) => {
+  addNode: (node) => update((state) => {
     const namedNode = { ...node, name: node.name || uniqueNodeName(state.doc, node.type) };
     const doc = withTimestamp({ ...state.doc, nodes: [...state.doc.nodes, namedNode] }, state.doc);
     return {
@@ -330,7 +341,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: [node.id],
     };
   }),
-  updateNode: (id, patch, record = true) => set((state) => {
+  updateNode: (id, patch, record = true) => update((state) => {
     const currentNode = getNode(state.doc, id);
     if (!currentNode || Object.entries(patch).every(([key, value]) =>
       (currentNode as unknown as Record<string, unknown>)[key] === value,
@@ -371,7 +382,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [],
     };
   }),
-  updateSelection: (patch) => set((state) => {
+  updateSelection: (patch) => update((state) => {
     const ids = new Set(state.selection);
     const doc = withTimestamp({
       ...state.doc,
@@ -383,7 +394,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [],
     };
   }),
-  deleteSelection: () => set((state) => {
+  deleteSelection: () => update((state) => {
     const ids = state.selection.filter((id) => {
       const node = getNode(state.doc, id);
       return node && !isNodeLocked(state.doc, node);
@@ -397,7 +408,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: [],
     };
   }),
-  duplicateSelection: () => set((state) => {
+  duplicateSelection: () => update((state) => {
     if (state.selection.length === 0) return state;
     const result = duplicateNodes(state.doc, state.selection);
     return {
@@ -407,7 +418,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: result.ids,
     };
   }),
-  copySelection: (cut = false) => set((state) => {
+  copySelection: (cut = false) => update((state) => {
     const rootIds = state.selection.filter((id) => !state.selection.some(
       (otherId) => otherId !== id && isDescendant(state.doc, id, otherId),
     ));
@@ -430,7 +441,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: [],
     };
   }),
-  pasteClipboard: (replace = false) => set((state) => {
+  pasteClipboard: (replace = false) => update((state) => {
     if (!state.clipboard || state.clipboard.nodes.length === 0) return state;
     const targetDoc = replace
       ? { ...state.doc, nodes: removeNodes(state.doc, state.selection) }
@@ -455,7 +466,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: state.clipboard.rootIds.map((id) => idMap.get(id)!).filter(Boolean),
     };
   }),
-  groupSelection: (asFrame = false) => set((state) => {
+  groupSelection: (asFrame = false) => update((state) => {
     const result = groupNodes(state.doc, state.selection, asFrame);
     if (!result) return state;
     return {
@@ -465,7 +476,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: [result.groupId],
     };
   }),
-  moveSelectionToPage: (pageId) => set((state) => {
+  moveSelectionToPage: (pageId) => update((state) => {
     if (state.selection.length === 0 || !getDocumentPages(state.doc).some((page) => page.id === pageId)) return state;
     return {
       doc: withTimestamp({ ...state.doc, activePageId: pageId, nodes: moveNodesToPage(state.doc, state.selection, pageId) }, state.doc),
@@ -474,19 +485,19 @@ export const useEditorStore = create<EditorState>((set) => ({
       viewport: { x: 100, y: 70, zoom: 1 },
     };
   }),
-  flattenSelection: () => set((state) => ({
+  flattenSelection: () => update((state) => ({
     doc: withTimestamp({ ...state.doc, nodes: flattenNodes(state.doc.nodes, state.selection) }, state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  outlineSelectionStroke: () => set((state) => ({
+  outlineSelectionStroke: () => update((state) => ({
     doc: withTimestamp({ ...state.doc, nodes: outlineNodeStrokes(state.doc.nodes, state.selection) }, state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  flipSelection: (axis) => set((state) => ({
+  flipSelection: (axis) => update((state) => ({
     doc: withTimestamp({ ...state.doc, nodes: flipNodes(state.doc.nodes, state.selection, axis) }, state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  nudgeSelection: (dx, dy) => set((state) => {
+  nudgeSelection: (dx, dy) => update((state) => {
     const rootIds = state.selection.filter((id) => {
       const node = getNode(state.doc, id);
       return node && !isNodeLocked(state.doc, node) && !state.selection.some(
@@ -504,7 +515,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [],
     };
   }),
-  alignSelection: (operation) => set((state) => {
+  alignSelection: (operation) => update((state) => {
     const rootIds = state.selection.filter((id) => {
       const node = getNode(state.doc, id);
       return node && !isNodeLocked(state.doc, node) && !state.selection.some(
@@ -519,7 +530,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [],
     };
   }),
-  createComponent: (id) => set((state) => {
+  createComponent: (id) => update((state) => {
     const node = getNode(state.doc, id);
     if (!node || node.component?.role === 'instance') return state;
     return {
@@ -528,7 +539,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [],
     };
   }),
-  createInstance: (id, placement) => set((state) => {
+  createInstance: (id, placement) => update((state) => {
     const node = getNode(state.doc, id);
     if (!node?.component) return state;
     const result = createComponentInstance(state.doc, node.component.rootId, placement);
@@ -540,7 +551,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: [result.instanceId],
     };
   }),
-  createVariant: (id) => set((state) => {
+  createVariant: (id) => update((state) => {
     const result = createComponentVariant(state.doc, id);
     if (!result) return state;
     return {
@@ -549,12 +560,12 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [], selection: [result.variantId],
     };
   }),
-  setVariant: (instanceId, variantId) => set((state) => ({
+  setVariant: (instanceId, variantId) => update((state) => ({
     doc: withTimestamp(setComponentVariant(state.doc, instanceId, variantId), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc],
     future: [], selection: [instanceId],
   })),
-  resetInstance: (id) => set((state) => {
+  resetInstance: (id) => update((state) => {
     const ids = new Set([id, ...getDescendantIds(state.doc, id)]);
     return {
       doc: withTimestamp({
@@ -565,56 +576,56 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [],
     };
   }),
-  detachInstance: (id) => set((state) => ({
+  detachInstance: (id) => update((state) => ({
     doc: withTimestamp(detachComponentInstance(state.doc, id), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc],
     future: [],
   })),
-  createStyle: (nodeId, type) => set((state) => ({
+  createStyle: (nodeId, type) => update((state) => ({
     doc: withTimestamp(createLibraryStyle(state.doc, nodeId, type), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  applyStyle: (nodeId, styleId) => set((state) => ({
+  applyStyle: (nodeId, styleId) => update((state) => ({
     doc: withTimestamp(preserveInstanceEdit(state.doc, applyLibraryStyle(state.doc, nodeId, styleId), nodeId), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  updateStyle: (styleId, patch) => set((state) => ({
+  updateStyle: (styleId, patch) => update((state) => ({
     doc: withTimestamp(updateLibraryStyle(state.doc, styleId, patch), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  deleteStyle: (styleId) => set((state) => ({
+  deleteStyle: (styleId) => update((state) => ({
     doc: withTimestamp(deleteLibraryStyle(state.doc, styleId), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  createVariable: (type) => set((state) => ({
+  createVariable: (type) => update((state) => ({
     doc: withTimestamp(createLibraryVariable(state.doc, type), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  createVariableCollection: (name) => set((state) => ({
+  createVariableCollection: (name) => update((state) => ({
     doc: withTimestamp(createLibraryCollection(state.doc, name), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  setVariableMode: (collectionId, modeId) => set((state) => ({
+  setVariableMode: (collectionId, modeId) => update((state) => ({
     doc: withTimestamp(setLibraryVariableMode(state.doc, collectionId, modeId), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  updateVariableValue: (variableId, value) => set((state) => ({
+  updateVariableValue: (variableId, value) => update((state) => ({
     doc: withTimestamp(updateLibraryVariableValue(state.doc, variableId, value), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  applyVariable: (nodeId, variableId, property) => set((state) => ({
+  applyVariable: (nodeId, variableId, property) => update((state) => ({
     doc: withTimestamp(preserveInstanceEdit(state.doc, applyLibraryVariable(state.doc, nodeId, variableId, property), nodeId), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  updateVariable: (variableId, patch) => set((state) => ({
+  updateVariable: (variableId, patch) => update((state) => ({
     doc: withTimestamp(updateLibraryVariable(state.doc, variableId, patch), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  deleteVariable: (variableId) => set((state) => ({
+  deleteVariable: (variableId) => update((state) => ({
     doc: withTimestamp(deleteLibraryVariable(state.doc, variableId), state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  addPrototypeLink: (sourceFrameId, targetFrameId, transition = 'dissolve', duration = 250) => set((state) => ({
+  addPrototypeLink: (sourceFrameId, targetFrameId, transition = 'dissolve', duration = 250) => update((state) => ({
     doc: withTimestamp({
       ...state.doc,
       prototypeLinks: [...(state.doc.prototypeLinks ?? []).filter((link) => link.sourceFrameId !== sourceFrameId), {
@@ -623,11 +634,11 @@ export const useEditorStore = create<EditorState>((set) => ({
     }, state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  removePrototypeLink: (linkId) => set((state) => ({
+  removePrototypeLink: (linkId) => update((state) => ({
     doc: withTimestamp({ ...state.doc, prototypeLinks: (state.doc.prototypeLinks ?? []).filter((link) => link.id !== linkId) }, state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  setActivePage: (pageId) => set((state) => {
+  setActivePage: (pageId) => update((state) => {
     if (!getDocumentPages(state.doc).some((page) => page.id === pageId) || getActivePageId(state.doc) === pageId) return state;
     return {
       doc: { ...state.doc, activePageId: pageId },
@@ -635,7 +646,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       viewport: { x: 100, y: 70, zoom: 1 },
     };
   }),
-  addPage: (name, groupId = null) => set((state) => {
+  addPage: (name, groupId = null) => update((state) => {
     const current = ensureDocumentPages(state.doc);
     const id = createId('page');
     const pages = getDocumentPages(current);
@@ -650,7 +661,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       viewport: { x: 100, y: 70, zoom: 1 },
     };
   }),
-  duplicatePage: (pageId) => set((state) => {
+  duplicatePage: (pageId) => update((state) => {
     const current = ensureDocumentPages(state.doc);
     const pages = getDocumentPages(current);
     const sourceIndex = pages.findIndex((page) => page.id === pageId);
@@ -669,7 +680,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       viewport: { x: 100, y: 70, zoom: 1 },
     };
   }),
-  renamePage: (pageId, name) => set((state) => {
+  renamePage: (pageId, name) => update((state) => {
     const current = ensureDocumentPages(state.doc);
     return {
       doc: withTimestamp({
@@ -681,7 +692,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
     };
   }),
-  setPageBackground: (pageId, background) => set((state) => {
+  setPageBackground: (pageId, background) => update((state) => {
     const current = ensureDocumentPages(state.doc);
     return {
       doc: withTimestamp({
@@ -693,7 +704,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
     };
   }),
-  deletePage: (pageId) => set((state) => {
+  deletePage: (pageId) => update((state) => {
     const current = ensureDocumentPages(state.doc);
     const pages = getDocumentPages(current);
     const pageIndex = pages.findIndex((page) => page.id === pageId);
@@ -717,7 +728,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [], selection: [],
     };
   }),
-  movePage: (pageId, direction) => set((state) => {
+  movePage: (pageId, direction) => update((state) => {
     const pages = [...getDocumentPages(state.doc)];
     const index = pages.findIndex((page) => page.id === pageId);
     const target = direction === 'up' ? index - 1 : index + 1;
@@ -728,7 +739,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
     };
   }),
-  movePageTo: (pageId, targetId) => set((state) => {
+  movePageTo: (pageId, targetId) => update((state) => {
     const pages = [...getDocumentPages(state.doc)];
     const index = pages.findIndex((page) => page.id === pageId);
     const targetIndex = pages.findIndex((page) => page.id === targetId);
@@ -741,7 +752,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
     };
   }),
-  setPageGroup: (pageId, groupId) => set((state) => {
+  setPageGroup: (pageId, groupId) => update((state) => {
     const current = ensureDocumentPages(state.doc);
     if (groupId && !current.pageGroups?.some((group) => group.id === groupId)) return state;
     return {
@@ -752,7 +763,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
     };
   }),
-  addPageGroup: (name) => set((state) => {
+  addPageGroup: (name) => update((state) => {
     const current = ensureDocumentPages(state.doc);
     const groups = current.pageGroups ?? [];
     return {
@@ -763,7 +774,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
     };
   }),
-  renamePageGroup: (groupId, name) => set((state) => ({
+  renamePageGroup: (groupId, name) => update((state) => ({
     doc: withTimestamp({
       ...state.doc,
       pageGroups: (state.doc.pageGroups ?? []).map((group) => group.id === groupId
@@ -772,7 +783,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     }, state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  deletePageGroup: (groupId) => set((state) => ({
+  deletePageGroup: (groupId) => update((state) => ({
     doc: withTimestamp({
       ...state.doc,
       pageGroups: (state.doc.pageGroups ?? []).filter((group) => group.id !== groupId),
@@ -780,7 +791,7 @@ export const useEditorStore = create<EditorState>((set) => ({
     }, state.doc),
     past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
   })),
-  reorder: (id, direction) => set((state) => {
+  reorder: (id, direction) => update((state) => {
     const nodes = reorderNode(state.doc.nodes, id, direction);
     if (nodes === state.doc.nodes) return state;
     return {
@@ -789,7 +800,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       future: [],
     };
   }),
-  reorderToEdge: (id, edge) => set((state) => {
+  reorderToEdge: (id, edge) => update((state) => {
     const nodes = reorderNodeToEdge(state.doc.nodes, id, edge);
     if (nodes === state.doc.nodes) return state;
     return {
@@ -797,7 +808,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       past: [...state.past.slice(-HISTORY_LIMIT + 1), state.doc], future: [],
     };
   }),
-  moveLayer: (id, targetId, position) => set((state) => {
+  moveLayer: (id, targetId, position) => update((state) => {
     const node = getNode(state.doc, id);
     const target = getNode(state.doc, targetId);
     if (!node || !target || id === targetId || isDescendant(state.doc, targetId, id) ||
@@ -834,7 +845,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: [id],
     };
   }),
-  undo: () => set((state) => {
+  undo: () => update((state) => {
     const previous = state.past.at(-1);
     if (!previous) return state;
     return {
@@ -844,7 +855,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: cleanSelection(previous, state.selection),
     };
   }),
-  redo: () => set((state) => {
+  redo: () => update((state) => {
     const next = state.future[0];
     if (!next) return state;
     return {
@@ -854,16 +865,18 @@ export const useEditorStore = create<EditorState>((set) => ({
       selection: cleanSelection(next, state.selection),
     };
   }),
-  renameDocument: (name) => set((state) => ({
+  renameDocument: (name) => update((state) => ({
     doc: withTimestamp({ ...state.doc, name: name.trim() || 'Без названия' }, state.doc),
   })),
-  newDocument: () => set({
+  newDocument: () => update({
     doc: createEmptyDocument(), past: [], future: [], selection: [], tool: 'select',
     viewport: { x: 100, y: 70, zoom: 1 },
   }),
-  loadDocument: (doc) => set({
+  loadDocument: (doc) => update({
     doc: doc.preserveSavedGeometry ? syncComponents(resolveVariables(doc)) : applyAutoLayout(syncComponents(resolveVariables(doc))),
     past: [], future: [], selection: [], tool: 'select',
-    viewport: { x: 100, y: 70, zoom: 1 },
+    // EditorCanvas fits a new document/page in useLayoutEffect. Keeping the
+    // viewport here also prevents async storage hydration from undoing that fit.
   }),
-}));
+};
+});

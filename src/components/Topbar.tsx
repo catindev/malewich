@@ -110,7 +110,7 @@ export function ProjectControls({ panelsVisible, onTogglePanels }: ProjectContro
       </div>
       {menuOpen && <button className="popover-dismiss" onClick={() => setMenuOpen(false)} aria-label="Закрыть меню" />}
       <input
-        ref={importRef} type="file" accept=".fig,.json,.forma.json,.malewich.json" hidden
+        ref={importRef} type="file" accept=".fig,.json,.malewich.json" hidden
         onChange={(event) => {
           void importDocument(event.target.files?.[0]);
           event.target.value = '';

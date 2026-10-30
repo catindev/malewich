@@ -96,6 +96,70 @@ test('keeps nested absolute geometry aligned after moving a frame', async ({ pag
   expect(moved.equals(rebuilt)).toBe(true);
 });
 
+test('uses text LOD only during a zoomed-out drag preview and restores full text on release', async ({ page }) => {
+  const now = new Date().toISOString();
+  const base = (id: string, name: string, x: number, y: number, width: number, height: number, parentId: string | null) => ({
+    id, name, x, y, width, height, parentId, rotation: 0, opacity: 1, visible: true, locked: false,
+    stroke: 'transparent', strokeWidth: 0,
+  });
+  const doc = {
+    version: 1, id: 'preview-lod', name: 'Preview LOD', createdAt: now, updatedAt: now,
+    nodes: [
+      { ...base('frame', 'Frame', 0, 0, 400, 300, null), type: 'frame', fill: '#ffffff', cornerRadius: 0, clip: false },
+      {
+        ...base('text', 'Text', 40, 50, 180, 40, 'frame'), type: 'text', fill: '#202020', text: 'Transient preview',
+        fontSize: 20, fontFamily: 'Arial, sans-serif', fontWeight: 400, lineHeight: 1.2, letterSpacing: 0, textAlign: 'left',
+      },
+    ],
+  };
+  await page.addInitScript((document) => {
+    localStorage.setItem('malewich:document:v1', JSON.stringify(document));
+  }, doc);
+  await page.goto('/?hitLayer=1');
+  await expect(page.locator('[data-renderer="webgl"]')).toBeVisible();
+  await page.locator('.zoom-value').click();
+  await page.getByRole('button', { name: '50%', exact: true }).click();
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-lod-text', '0');
+  const frame = await page.locator('[data-node-id="frame"]').boundingBox();
+  if (!frame) throw new Error('Frame hit target not found');
+  await page.mouse.move(frame.x + frame.width / 2, frame.y + frame.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(frame.x + frame.width / 2 + 60, frame.y + frame.height / 2 + 30, { steps: 3 });
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-lod-text', '1');
+  await page.mouse.up();
+  await expect(page.locator('.pixi-drag-scene')).toBeHidden();
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-lod-text', '0');
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-text-resolution', '1');
+});
+
+test('shares downsampled image textures and raises their resolution only when needed', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  const now = new Date().toISOString();
+  const source = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="3000"><rect width="4000" height="3000" fill="#7357ff"/></svg>')}`;
+  const image = (id: string, x: number) => ({
+    id, name: id, x, y: 0, width: 100, height: 75, parentId: null, rotation: 0, opacity: 1,
+    visible: true, locked: false, stroke: 'transparent', strokeWidth: 0, type: 'image', src: source, cornerRadius: 0,
+  });
+  const doc = {
+    version: 1, id: 'image-buckets', name: 'Image buckets', createdAt: now, updatedAt: now,
+    nodes: [image('first', 0), image('second', 200)],
+  };
+  await page.addInitScript((document) => {
+    localStorage.setItem('malewich:document:v1', JSON.stringify(document));
+  }, doc);
+  await page.goto('/?hitLayer=1');
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-image-cache-entries', '1');
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-image-buckets', '512');
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-image-cache-bytes', String(512 * 384 * 4));
+  await page.locator('.zoom-value').click();
+  await page.getByRole('button', { name: '1600%', exact: true }).click();
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-image-buckets', '2048');
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-image-cache-entries', '2');
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-image-cache-bytes', String(512 * 384 * 4 + 2048 * 1536 * 4));
+  expect(errors).toEqual([]);
+});
+
 test('edits text and restores the project after reload', async ({ page }) => {
   await page.goto('/?hitLayer=1');
   await page.getByRole('button', { name: 'Текст', exact: true }).click();

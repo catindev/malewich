@@ -102,6 +102,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 export function EditorCanvas() {
   const doc = usePageDocument();
+  const change = useEditorStore((state) => state.change);
   const selection = useEditorStore((state) => state.selection);
   const tool = useEditorStore((state) => state.tool);
   const viewport = useEditorStore((state) => state.viewport);
@@ -188,10 +189,10 @@ export function EditorCanvas() {
   }, [isPageSwitching]);
 
   useLayoutEffect(() => {
-    // Fit before the renderer's passive effects. This avoids drawing a newly
-    // selected page once at the reset viewport and then immediately again.
+    // Fit before the renderer's passive effects. A newly loaded document can
+    // reuse the same activePageId, so page identity alone is not sufficient.
     fitToContent();
-  }, [activePageId, fitToContent]);
+  }, [doc.id, activePageId, fitToContent]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -844,10 +845,11 @@ export function EditorCanvas() {
     reader.readAsDataURL(file);
   };
 
-  const selectedNodes = selection.flatMap((id) => {
+  const selectionKey = selection.join('|');
+  const selectedNodes = useMemo(() => selection.flatMap((id) => {
     const node = getNode(doc, id);
     return node ? [node] : [];
-  });
+  }), [doc, selectionKey]);
   const editingNode = editingId ? getNode(doc, editingId) : undefined;
   const rootNodes = getChildren(doc, null);
   const activeMoveNodes = useMemo(() => activeMoveIds.flatMap((id) => {
@@ -897,7 +899,7 @@ export function EditorCanvas() {
         </svg>
         {!webglFailed && (
           <PixiScene
-            doc={doc} viewport={viewport} editingId={editingId} panning={panning}
+            doc={doc} change={change} viewport={viewport} editingId={editingId} panning={panning}
             movingIds={compositorMoveIds} moveDelta={deferredMoveDelta}
             suppressedIds={suppressedMoveIds} onFallback={handleRendererFallback}
           />

@@ -241,6 +241,8 @@ kbd {
 .auto-layout-toggle { margin-top: 0; margin-bottom: 10px; }
 .auto-layout-controls > .number-field { margin-bottom: 7px; }
 .layers-tree { flex: 1; overflow: auto; padding: 6px 5px; }
+.layers-virtual-spacer { position: relative; width: 100%; }
+.layer-virtual-row { position: absolute; inset: 0 0 auto; height: 31px; }
 .layer-row {
   height: 31px; display: flex; align-items: center; gap: 5px; padding-right: 5px;
   border-radius: 5px; cursor: default; color: #555; user-select: none; position: relative;

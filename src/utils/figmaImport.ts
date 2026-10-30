@@ -1,4 +1,5 @@
 import { materializeFigArchive } from '@open-pencil/fig';
+import { imageMimeType } from '@open-pencil/scene-graph';
 import type { SceneNode as FigmaSceneNode } from '@open-pencil/scene-graph';
 import type {
   AutoLayoutSettings,
@@ -34,6 +35,19 @@ function visiblePaint(node: FigmaSceneNode, kind: 'fills'): FigmaSceneNode['fill
 function visiblePaint(node: FigmaSceneNode, kind: 'strokes'): FigmaSceneNode['strokes'][number] | undefined;
 function visiblePaint(node: FigmaSceneNode, kind: 'fills' | 'strokes') {
   return node[kind].find((paint) => paint.visible && paint.type === 'SOLID' && isColor(paint.color));
+}
+
+function visibleImagePaint(node: FigmaSceneNode) {
+  return node.fills.find((paint) => paint.visible && paint.type === 'IMAGE' && paint.imageHash);
+}
+
+/** Convert embedded FIG image bytes without depending on object URLs or network access. */
+export function figImageToDataUrl(data: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < data.byteLength; offset += 0x8000) {
+    binary += String.fromCharCode(...data.subarray(offset, offset + 0x8000));
+  }
+  return `data:${imageMimeType(data)};base64,${btoa(binary)}`;
 }
 
 /** Decode Figma's command/float32 geometry blobs into editable SVG path data. */
@@ -212,10 +226,10 @@ function equivalent(left: unknown, right: unknown): boolean {
 }
 
 const overrideFields = [
-  'name', 'width', 'height', 'rotation', 'opacity', 'visible', 'locked', 'fill', 'stroke', 'strokeWidth',
+  'name', 'width', 'height', 'rotation', 'flipX', 'flipY', 'opacity', 'visible', 'locked', 'fill', 'stroke', 'strokeWidth',
   'strokeAlign', 'cornerRadius', 'clip', 'autoLayout', 'layout', 'text', 'fontSize', 'fontFamily',
   'fontWeight', 'lineHeight', 'letterSpacing', 'textAlign', 'autoSize', 'path', 'pathWidth', 'pathHeight',
-  'fillRule', 'variableBindings',
+  'fillRule', 'src', 'objectFit', 'variableBindings',
 ] as const;
 
 export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет Figma'): DesignDocument {
@@ -270,12 +284,17 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
   const importedByGraphId = new Map<string, EditorNode>();
   const instanceSources = new Map<string, { ownerId: string; sourceId: string }>();
 
-  const visit = (node: FigmaSceneNode, parentId: string | null, offsetX: number, pageId: string) => {
-    const absolute = graph.getAbsolutePosition(node.id);
-    const x = absolute.x + offsetX;
-    const y = absolute.y;
+  const visit = (node: FigmaSceneNode, parentId: string | null, offsetX: number, offsetY: number, pageId: string) => {
+    // Malewich stores untransformed absolute layout geometry and composes each
+    // node's rotation/reflection through its ancestors. getAbsolutePosition()
+    // already includes those transforms, so using it here would apply them twice.
+    const x = node.x + offsetX;
+    const y = node.y + offsetY;
     const fill = visiblePaint(node, 'fills');
     const stroke = visiblePaint(node, 'strokes');
+    const imageFill = visibleImagePaint(node);
+    const imageBytes = imageFill?.imageHash ? graph.images.get(imageFill.imageHash) : undefined;
+    const imageScaleMode = String(imageFill?.imageScaleMode ?? '');
     const ancestors: FigmaSceneNode[] = [];
     let ancestor = node.parentId ? graph.getNode(node.parentId) : undefined;
     while (ancestor && ancestor.type !== 'CANVAS') {
@@ -306,7 +325,11 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
       y,
       width: Math.max(0, node.width),
       height: Math.max(0, node.height),
-      rotation: node.rotation,
+      // Figma composes flip → rotation; Malewich composes rotation → flip.
+      // Negating a single-axis reflection's angle preserves the same affine matrix.
+      rotation: node.flipX !== node.flipY ? -node.rotation : node.rotation,
+      flipX: node.flipX || undefined,
+      flipY: node.flipY || undefined,
       opacity: node.opacity,
       visible: node.visible,
       locked: node.locked,
@@ -322,7 +345,18 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
     };
 
     let imported: EditorNode;
-    if (node.type === 'TEXT') {
+    const imageShape = node.type === 'FRAME' || node.type === 'RECTANGLE' || node.type === 'ROUNDED_RECTANGLE';
+    if (imageFill && imageBytes && imageShape && graph.getChildren(node.id).length === 0 &&
+      (imageScaleMode === 'FILL' || imageScaleMode === 'STRETCH')) {
+      imported = {
+        ...base,
+        type: 'image',
+        src: figImageToDataUrl(imageBytes),
+        cornerRadius: node.independentCorners ? node.topLeftRadius : node.cornerRadius,
+        objectFit: imageScaleMode === 'FILL' ? 'cover' : 'fill',
+        opacity: node.opacity * imageFill.opacity,
+      };
+    } else if (node.type === 'TEXT') {
       imported = {
         ...base,
         type: 'text',
@@ -396,14 +430,14 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
 
     nodes.push(imported);
     importedByGraphId.set(node.id, imported);
-    graph.getChildren(node.id).forEach((child) => visit(child, imported.id, offsetX, pageId));
+    graph.getChildren(node.id).forEach((child) => visit(child, imported.id, x, y, pageId));
   };
 
   pages.forEach((page, pageIndex) => {
     const roots = graph.getChildren(page.id);
     // Pages are independent coordinate spaces. Never lay them out side by side:
     // doing so moves a newly selected page thousands of pixels outside the viewport.
-    roots.forEach((root) => visit(root, null, 0, `fig-page-${pageIndex}`));
+    roots.forEach((root) => visit(root, null, 0, 0, `fig-page-${pageIndex}`));
   });
 
   // Keep source links, but freeze only values that actually differ from the main component.

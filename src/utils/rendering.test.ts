@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { GraphicsPath } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 import { importFigmaDocument } from './figmaImport';
-import { MAX_ZOOM, MIN_ZOOM, textResolutionForZoom, vectorFillPaths } from './rendering';
+import { MAX_ZOOM, MIN_ZOOM, previewOverscan, textResolutionForZoom, vectorFillPaths } from './rendering';
 
 function holes(data: string): number {
   return new GraphicsPath().addPath(new GraphicsPath(data, true)).shapePath.shapePrimitives
@@ -21,6 +21,12 @@ describe('canvas text resolution', () => {
     expect(textResolutionForZoom(256, 2)).toBe(512);
     expect(MIN_ZOOM).toBe(0.05);
     expect(MAX_ZOOM).toBe(256);
+  });
+
+  it('bounds preview overscan by viewport size and the 128px cap', () => {
+    expect(previewOverscan(1000, 800)).toBe(100);
+    expect(previewOverscan(2560, 1440)).toBe(128);
+    expect(previewOverscan(0, 800)).toBe(0);
   });
 });
 

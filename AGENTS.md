@@ -35,7 +35,7 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 - `src/components/LayersPanel.tsx` / `PagesPanel.tsx` — слои и плоский список страниц; группы существуют только как legacy metadata.
 - `src/utils/figmaImport.ts` — граница Figma decoder и конвертация модели.
 - `src/utils/export.ts` — SVG/PNG/JSON.
-- `src/utils/storage.ts` — persistence и Forma → Malewich migration.
+- `src/utils/storage.ts` — текущие IndexedDB и localStorage форматы Malewich.
 - `e2e/fixtures/TCB.PAY.fig` — реальный регрессионный fixture; не заменять без необходимости.
 - `.fig-import/` — локальные исследования и профили, не публикуются.
 
@@ -65,22 +65,25 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 - Renderer — PixiJS/WebGL с retained display objects и ручным `app.render()`, без постоянного ticker. Асинхронные image/editing/resize invalidations коалесцируются в один rAF; resize не debounce.
 - Чистый translation переиспользует visuals; не пересоздавайте текстуры и Graphics всего поддерева на каждый pointermove. Посещённые страницы хранят retained worlds и очищаются при смене документа; неизменённый viewport повторно не рисуется.
 - Не возвращайте RenderTexture-кэш корня. При простом root drag `state.doc` остаётся immutable до release: существующее поддерево и selection получают общий deferred compositor delta, а document commit/history выполняются один раз. Nested, Auto Layout и reparenting не переводите на этот путь без учёта предков.
-- Чистый X/Y translation main component не должен запускать component reconciliation или менять identities/геометрию instances. Мемоизация Layers обязана пропускать transform-only изменения, но propagate display-изменения потомков и collapsed/renaming контекст.
+- `DocumentChange` передаёт изменённые/deleted IDs, свойства и структурный признак; renderer не сканирует sibling order при обычном edit. Auto Layout и component sync возвращают прежние object references при равных значениях. Чистый X/Y translation main component не должен запускать component reconciliation или менять identities/геометрию instances.
+- Layers строит плоский список по `(document, page, collapsed)` и создаёт DOM только для видимых строк с overscan. Не возвращайте полное рекурсивное DOM-дерево или рекурсивное сравнение поддеревьев. Мемоизация строк обязана пропускать transform-only изменения, но propagate display-изменения потомков и collapsed/renaming контекст.
 - Изменения nested transforms проверяйте pixel-сравнением incremental результата с полным rebuild после reload.
 - Сначала профилируйте реальный жест. Убедитесь, что цель видима, действительно выбрана и координата изменилась. Auto Layout может законно вернуть позицию ребёнка.
 - `data-render-ms` не включает всю нативную/software-WebGL растеризацию; CDP `(program)` тоже учитывайте.
-- Zoom выполняется через немедленный compositor preview и один финальный WebGL render после 90 мс паузы. Разрешение retained `Text` синхронизируется с zoom/DPR только у видимых объектов; длинные строки, не помещающиеся в GPU texture limit, делятся на retained-фрагменты. Не возвращайте общий предел 8× и не растрируйте весь длинный текст на 25 600% целиком. Максимальный zoom — `MAX_ZOOM = 256` (25 600%).
+- Zoom выполняется через немедленный compositor preview и один финальный WebGL render после 90 мс паузы. Text measurement/wrapping и Pixi fragment measurements кэшируются отдельно от raster resolution и инвалидируются по font generation. Разрешение retained `Text` синхронизируется с zoom/DPR только у видимых объектов; длинные строки, не помещающиеся в GPU texture limit, делятся на retained-фрагменты. Не возвращайте общий предел 8× и не растрируйте весь длинный текст на 25 600% целиком. Максимальный zoom — `MAX_ZOOM = 256` (25 600%).
+- Low-detail текст допустим только как transient drag preview при zoom ≤ 50%; release обязан вернуть полный кадр. Изображения используют общий bounded LRU с display/DPR buckets и не вытесняют активные textures; export не зависит от уменьшенной canvas-копии.
 - Vector fill использует `vectorFillPaths()` для outer+hole groups по winding; не возвращайтесь к ограниченному Pixi SVG parser, который теряет `nonzero` holes. Pixel-проверки крайнего zoom должны наводиться на заведомо закрашенную точку, а не на середину text bounds, где может быть межбуквенный пробел.
 
 ### Figma import
 
 - Поддерживаемая визуальная модель описана в README. Не заявляйте полную Figma parity.
-- Solid paints, абсолютная геометрия, editable text/vector, Auto Layout, components, variables и видимые страницы — основной проверенный контур.
-- Gradients, произвольные image fills, effects, masks и mixed text runs не считаются полностью поддержанными.
+- Solid paints, абсолютная геометрия, editable text/vector, Auto Layout, components, variables, видимые страницы и embedded `FILL`/`STRETCH` images на листовых frame/rectangle shapes — основной проверенный контур.
+- Gradients, произвольные image fills вне этого случая, `CROP`/`TILE`, effects, masks и mixed text runs не считаются полностью поддержанными.
+- `graph.getAbsolutePosition()` уже включает rotation/flip. Не копируйте его вместе с flags в absolute layout model: суммируйте нетрансформированные translations и согласовывайте порядок flip → rotation с общей matrix, иначе иллюстрации и clipping сместятся.
 - Expanded `strokeGeometry` не обводится повторно. Vector SVG/export должен нести собственные paint attributes; прозрачные paints не создают Pixi draw instructions.
 - При отсутствии derived geometry используйте `vectorNetwork`, а не rectangle fallback. `isMask` — editable metadata, mask-контур не должен становиться обычной видимой заливкой; полный mask compositing отдельно не заявлен.
 - Видимые Figma-страницы сохраняются раздельно в исходных coordinate spaces; не сдвигайте их горизонтально друг относительно друга. Internal Only Canvas пропускается.
-- Используйте реальные `TCB.PAY.fig` и `TCB.PAY.SMZ.fig` regressions; не меняйте сохранённую геометрию глобальным reflow при открытии.
+- Используйте реальные `TCB.PAY.fig`, `TCB.PAY.SMZ.fig` и community fixtures UI Prep/Globbb; не меняйте сохранённую геометрию глобальным reflow при открытии.
 
 ### UI и Dev Mode
 
@@ -92,11 +95,12 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 
 ## Тесты и регрессии
 
-Базовый снимок содержит 67 unit-тестов и 44 browser-сценария; текущий контур после добавления SMZ, vector/mask, page/UI, extreme zoom/nonzero rendering, text tiling, object operations/export, deferred root labels, component/layer optimizations, branding и canvas-only exposed-pixel regressions — 84 и 53 соответственно. При добавлении тестов обновляйте документацию с фактическими числами.
+Базовый снимок содержит 67 unit-тестов и 44 browser-сценария; текущий контур после DocumentChange, виртуализации Layers, text layout cache, transient LOD, image buckets, SMZ, vector/mask, page/UI, extreme zoom/nonzero rendering, text tiling, object operations/export, deferred root labels, component/layer optimizations, branding, canvas-only exposed-pixel и community import regressions — 96 и 58 соответственно. При добавлении тестов обновляйте документацию с фактическими числами.
 
 Обязательные специальные проверки:
 
 - TCB.PAY import/reload и non-blank canvas; TCB.PAY.SMZ second page + Presentation;
+- UI Prep SVG/WebGL images + Inter + fit/reload; Globbb reflected world transforms и known-pixel brain/arm;
 - Canvas Control-click menu не должен ломать Cmd/Ctrl+primary deep-select;
 - nested move incremental vs rebuild pixel equality;
 - изоляция двух страниц с одинаковыми координатами;

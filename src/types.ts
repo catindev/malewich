@@ -100,6 +100,8 @@ export interface ImageNode extends BaseNode {
   type: 'image';
   src: string;
   cornerRadius: number;
+  /** Figma IMAGE FILL maps to cover; STRETCH maps to fill. Default preserves existing cover behavior. */
+  objectFit?: 'cover' | 'fill';
 }
 
 export interface VectorNode extends BaseNode {
