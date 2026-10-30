@@ -1,9 +1,8 @@
-{(() => {
-  const C = {
-    canvas: '#EFF0ED', panel: '#FFFFFF', ink: '#20221F', muted: '#7B7F78', faint: '#A4A8A0',
-    line: '#E4E6E1', soft: '#F4F5F2', hover: '#EBEDE8', blue: '#356FC4', blueSoft: '#EAF1FC',
-    red: '#E24832', brandBlue: '#2D63A8', green: '#2C8B68', greenSoft: '#EAF6F0',
-    amber: '#B47A22', amberSoft: '#FFF5E4', violet: '#7456B8', violetSoft: '#F1EDFA',
+const C = {
+    canvas: '#EFF0ED', panel: '#FFFFFF', ink: '#20221F', muted: '#646A62', faint: '#676C64',
+    line: '#E4E6E1', soft: '#F4F5F2', hover: '#EBEDE8', blue: '#2D63A8', blueSoft: '#EAF1FC',
+    red: '#E24832', redText: '#A82E20', brandBlue: '#2D63A8', green: '#1E6F50', greenSoft: '#EAF6F0',
+    amber: '#83510B', amberSoft: '#FFF5E4', violet: '#7456B8', violetSoft: '#F1EDFA',
     darkCanvas: '#161816', darkPanel: '#20231F', darkSoft: '#2A2D29', darkLine: '#383C36',
     darkInk: '#F1F3ED', darkMuted: '#9BA198', white: '#FFFFFF', black: '#151615'
   }
@@ -27,50 +26,54 @@
     history: 'M3 12a9 9 0 109-9 9 9 0 00-7 3M3 4v6h6M12 7v5l4 2', clock: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l4 2',
     code: 'M8 6l-6 6 6 6M16 6l6 6-6 6M14 3l-4 18', component: 'M12 2l4 4-4 4-4-4 4-4zM5 9l4 4-4 4-4-4 4-4zM19 9l4 4-4 4-4-4 4-4zM12 16l4 4-4 4-4-4 4-4z',
     layers: 'M12 3l9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 16l9 5 9-5', image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M16 8h.01',
-    arrow: 'M4 12h16M14 6l6 6-6 6', undo: 'M9 7l-5 5 5 5M4 12h9a6 6 0 016 6',
+    arrow: 'M4 12h16M14 6l6 6-6 6', undo: 'M9 7l-5 5 5 5M4 12h9a6 6 0 016 6', redo: 'M15 7l5 5-5 5M20 12h-9a6 6 0 00-6 6',
     info: 'M12 3a9 9 0 100 18 9 9 0 000-18zM12 11v6M12 7h.01', copy: 'M8 8h12v12H8zM4 16V4h12',
     sliders: 'M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6', trash: 'M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6',
     cursor: 'M5 3l14 10-7 1 4 6-3 1-4-6-4 4V3z', grid: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z'
   }
 
   function T({ x = 0, y = 0, w = 100, text, size = 11, color = C.ink, weight = 400, align = 'left', lineHeight, name = 'Текст', letterSpacing = 0 }) {
-    return <Text name={name} x={x} y={y} w={w} font="Inter" size={size} weight={weight} color={color} textAlign={align} textAutoResize="height" lineHeight={lineHeight ?? size * 1.35} letterSpacing={letterSpacing}>{text}</Text>
+    return <Text name={name} x={x} y={y} w={w} font="Inter" size={Math.max(12, size)} weight={weight} color={color} textAlign={align} textAutoResize="height" lineHeight={lineHeight ?? size * 1.35} letterSpacing={letterSpacing}>{text}</Text>
   }
 
   function I({ x = 0, y = 0, name, size = 16, color = C.muted, stroke = 1.7 }) {
-    return <svg name={`Иконка / ${name}`} x={x} y={y} size={size} viewBox="0 0 24 24"><path d={paths[name] ?? paths.square} fill="none" stroke={color} stroke-width={stroke} stroke-linecap="round" stroke-linejoin="round" /></svg>
+    return <svg name={`Иконка / ${name === 'link' ? 'связь' : name}`} x={x} y={y} size={size} viewBox="0 0 24 24"><path d={paths[name] ?? paths.square} fill="none" stroke={color} stroke-width={stroke} stroke-linecap="round" stroke-linejoin="round" /></svg>
   }
 
-  function Mark({ x, y, s = 0.18, dark = false }) {
-    return <Frame name="Знак Малевич" x={x} y={y} w={160 * s} h={150 * s}>
-      <Frame name="Холст с M" x={8 * s} y={10 * s} w={100 * s} h={100 * s} rotate={-12}>
-        <Rectangle w={100 * s} h={100 * s} bg={dark ? C.darkInk : C.black} />
-        <svg x={10 * s} y={10 * s} size={80 * s} viewBox="0 0 100 100"><path d="M15 10 H31 L50 43 L69 10 H85 V90 H68 V43 L50 72 L32 43 V90 H15 Z" fill={dark ? C.darkPanel : '#FFFFFF'} /></svg>
+  function Mark({ x, y, dark = false }) {
+    return <Frame name="Знак Малевич" x={x} y={y} w={29} h={27}>
+      <Frame name="Холст с M" x={1} y={2} w={18} h={18} rotate={-12}>
+        <Rectangle name="Фон знака" w={18} h={18} bg={dark ? C.darkInk : C.black} />
+        <svg name="Буква M" x={2} y={2} size={14} viewBox="0 0 100 100"><path d="M15 10 H31 L50 43 L69 10 H85 V90 H68 V43 L50 72 L32 43 V90 H15 Z" fill={dark ? C.darkPanel : '#FFFFFF'} /></svg>
       </Frame>
-      <Rectangle name="Синяя панель" x={0} y={116 * s} w={90 * s} h={25 * s} rotate={-12} bg={C.brandBlue} />
-      <Rectangle name="Красная панель" x={112 * s} y={0} w={42 * s} h={126 * s} rotate={12} bg={C.red} />
+      <Rectangle name="Синяя панель" x={0} y={21} w={16} h={5} rotate={-12} bg={C.brandBlue} />
+      <Rectangle name="Красная панель" x={20} y={0} w={8} h={23} rotate={12} bg={C.red} />
     </Frame>
   }
 
   function Button({ x, y, w, h = 32, text, icon, primary = false, danger = false, dark = false, disabled = false, size = 11, align = 'center' }) {
-    const bg = disabled ? (dark ? C.darkSoft : C.soft) : primary ? C.blue : danger ? C.red : (dark ? C.darkSoft : C.panel)
+    const bg = disabled ? (dark ? C.darkSoft : C.soft) : primary ? C.blue : danger ? C.redText : (dark ? C.darkSoft : C.panel)
     const color = disabled ? (dark ? C.darkMuted : C.faint) : primary || danger ? C.white : dark ? C.darkInk : C.ink
-    const border = primary || danger || disabled ? '#00000000' : dark ? C.darkLine : C.line
+    const border = primary || danger || disabled ? undefined : dark ? C.darkLine : C.line
+    const textWidth = Math.min(w - (icon ? 44 : 16), text.length * Math.max(12, size) * 0.64)
+    const groupWidth = textWidth + (icon ? 20 : 0)
+    const iconX = align === 'left' ? 10 : Math.max(8, (w - groupWidth) / 2)
     return <Frame name={`Кнопка / ${text}`} x={x} y={y} w={w} h={h} rounded={6} bg={bg} stroke={border} strokeWidth={1}>
-      {icon && <I x={align === 'left' ? 10 : Math.max(8, (w - text.length * size * 0.58 - 20) / 2)} y={(h - 15) / 2} name={icon} size={15} color={color} />}
-      <T x={icon ? (align === 'left' ? 31 : 0) : 0} y={(h - size * 1.35) / 2 - 1} w={icon && align === 'left' ? w - 36 : w} text={text} size={size} weight={600} color={color} align={align} />
+      {icon && <I x={iconX} y={(h - 15) / 2} name={icon} size={15} color={color} />}
+      <T x={icon ? (align === 'left' ? 31 : iconX + 20) : 0} y={(h - size * 1.35) / 2 - 1} w={icon ? (align === 'left' ? w - 36 : textWidth) : w} text={text} size={size} weight={600} color={color} align={icon && align !== 'left' ? 'left' : align} />
     </Frame>
   }
 
   function Pill({ x, y, w, h = 26, text, icon, color = C.ink, bg = C.soft, dark = false, size = 10 }) {
-    return <Frame name={`Метка / ${text}`} x={x} y={y} w={w} h={h} rounded={h / 2} bg={bg}>
+    const pad = size < 10 ? 4 : 10
+    return <Frame name={`Метка / ${text}`} x={x} y={y} w={w} h={h} rounded={9999} bg={bg}>
       {icon && <I x={8} y={(h - 13) / 2} name={icon} size={13} color={color} />}
-      <T x={icon ? 26 : 10} y={(h - size * 1.35) / 2 - 1} w={w - (icon ? 31 : 20)} text={text} size={size} weight={550} color={color} align="center" />
+      <T x={icon ? 24 : pad} y={(h - size * 1.35) / 2 - 1} w={w - (icon ? 29 : pad * 2)} text={text} size={size} weight={550} color={color} align="center" />
     </Frame>
   }
 
   function Checkbox({ x, y, checked = true, color = C.blue, dark = false }) {
-    return <Frame name={checked ? 'Флажок / выбран' : 'Флажок'} x={x} y={y} w={15} h={15} rounded={4} bg={checked ? color : '#00000000'} stroke={checked ? color : dark ? C.darkMuted : C.faint} strokeWidth={1}>
+    return <Frame name={checked ? 'Флажок / выбран' : 'Флажок'} x={x} y={y} w={15} h={15} rounded={4} bg={checked ? color : dark ? C.darkPanel : C.panel} stroke={checked ? color : dark ? C.darkMuted : C.faint} strokeWidth={1}>
       {checked && <I x={1.5} y={1.5} name="check" size={12} color={C.white} stroke={2.3} />}
     </Frame>
   }
@@ -84,7 +87,7 @@
 
   function Brand({ dark = false }) {
     return <Frame name="Проект" x={0} y={0} w={240} h={64} bg={dark ? C.darkPanel : C.panel}>
-      <Mark x={12} y={15} s={0.18} dark={dark} />
+      <Mark x={12} y={15} dark={dark} />
       <T x={50} y={12} w={150} text="Малевич" size={14} weight={750} color={dark ? C.darkInk : C.ink} />
       <T x={50} y={34} w={160} text="Пульс / Продукт.fig" size={10} color={dark ? C.darkMuted : C.muted} />
       <I x={215} y={24} name="down" size={14} color={dark ? C.darkMuted : C.muted} />
@@ -94,7 +97,7 @@
   function PanelTabs({ active = 'layers', dark = false }) {
     const items = [['layers', 'Слои', 12, 68], ['agent', 'Агент', 84, 76], ['git', 'Git', 164, 62]]
     return <Frame name="Режимы левой панели" x={0} y={64} w={240} h={40} bg={dark ? C.darkPanel : C.panel}>
-      {items.map(([id, label, x, w]) => <Frame name={`Вкладка / ${label}`} x={x} y={5} w={w} h={29} rounded={5} bg={active === id ? (dark ? C.darkSoft : C.soft) : '#00000000'}>
+      {items.map(([id, label, x, w]) => <Frame name={`Вкладка / ${label}`} x={x} y={5} w={w} h={29} rounded={5} bg={active === id ? (dark ? C.darkSoft : C.soft) : undefined}>
         {id === 'agent' && <I x={8} y={8} name="sparkle" size={13} color={active === id ? C.blue : dark ? C.darkMuted : C.muted} />}
         {id === 'git' && <I x={8} y={8} name="branch" size={13} color={active === id ? C.blue : dark ? C.darkMuted : C.muted} />}
         <T x={id === 'layers' ? 0 : 25} y={8} w={id === 'layers' ? w : w - 27} text={label} size={10} weight={active === id ? 650 : 500} color={active === id ? (dark ? C.darkInk : C.ink) : dark ? C.darkMuted : C.muted} align={id === 'layers' ? 'center' : 'left'} />
@@ -105,27 +108,27 @@
 
   function CanvasControls({ dark = false, focus = false, zoom = '80%', branch, agent = false, git = false }) {
     const left = focus ? 16 : 256
-    const right = focus ? 1216 : 944
+    const right = focus ? 1264 : 984
     const panel = dark ? C.darkPanel : C.panel
     const ink = dark ? C.darkInk : C.ink
     const line = dark ? C.darkLine : C.line
     return <>
-      <Frame name="Путь и контекст" x={left} y={16} w={branch ? 328 : 286} h={38} rounded={8} bg={panel} stroke={line} strokeWidth={1} shadow="0 3 12 #0000000D">
+      <Frame name="Путь и контекст" x={left} y={16} w={branch ? 380 : 286} h={38} rounded={8} bg={panel} stroke={line} strokeWidth={1} shadow="0 3 12 #0000000D">
         <I x={11} y={11} name={git ? 'branch' : agent ? 'sparkle' : 'layers'} size={16} color={agent ? C.violet : git ? C.amber : C.blue} />
-        <T x={35} y={11} w={branch ? 244 : 202} text={branch ?? 'Пульс / Главная / Обзор'} size={10} weight={550} color={ink} />
-        <I x={(branch ? 328 : 286) - 29} y={12} name="link" size={14} color={dark ? C.darkMuted : C.muted} />
+        <T x={35} y={11} w={branch ? 270 : 176} text={branch ?? 'Пульс / Главная / Обзор'} size={10} weight={550} color={ink} />
+        <I x={(branch ? 380 : 286) - 52} y={12} name="panels" size={14} color={dark ? C.darkMuted : C.muted} />
+        <I x={(branch ? 380 : 286) - 29} y={12} name="link" size={14} color={dark ? C.darkMuted : C.muted} />
       </Frame>
-      <Frame name="Действия просмотра" x={right} y={16} w={focus ? 208 : 200} h={38} rounded={8} bg={panel} stroke={line} strokeWidth={1} shadow="0 3 12 #0000000D">
-        <I x={12} y={11} name="play" size={16} color={ink} />
-        <Rectangle x={39} y={9} w={1} h={20} bg={line} />
-        <I x={51} y={11} name={dark ? 'sun' : 'moon'} size={16} color={dark ? C.darkMuted : C.muted} />
-        <I x={81} y={11} name="panels" size={16} color={dark ? C.darkMuted : C.muted} />
+      <Frame name="Действия просмотра" x={right} y={16} w={160} h={38} rounded={8} bg={panel} stroke={line} strokeWidth={1} shadow="0 3 12 #0000000D">
+        <I x={12} y={11} name="undo" size={16} color={dark ? C.darkMuted : C.muted} />
+        <I x={42} y={11} name="redo" size={16} color={dark ? C.darkMuted : C.muted} />
+        <Rectangle x={69} y={9} w={1} h={20} bg={line} />
+        <I x={81} y={11} name="play" size={16} color={ink} />
         <Rectangle x={108} y={9} w={1} h={20} bg={line} />
-        <I x={119} y={11} name="export" size={15} color={dark ? C.darkMuted : C.muted} />
-        <T x={140} y={12} w={55} text="Экспорт" size={10} weight={550} color={ink} />
+        <I x={120} y={11} name={dark ? 'sun' : 'moon'} size={16} color={dark ? C.darkMuted : C.muted} />
       </Frame>
       <Frame name="Инструменты" x={left} y={254} w={40} h={328} rounded={9} bg={panel} stroke={line} strokeWidth={1} shadow="0 5 18 #00000012">
-        {['pointer', 'frame', 'square', 'pen', 'type', 'hand', 'comment'].map((name, index) => <Frame name={`Инструмент / ${name}`} x={4} y={5 + index * 39} w={32} h={32} rounded={6} bg={index === 0 ? C.blueSoft : '#00000000'}>
+        {['pointer', 'frame', 'square', 'pen', 'type', 'hand', 'comment'].map((name, index) => <Frame name={`Инструмент / ${name}`} x={4} y={5 + index * 39} w={32} h={32} rounded={6} bg={index === 0 ? C.blueSoft : undefined}>
           <I x={8} y={8} name={name} size={16} color={index === 0 ? C.blue : dark ? C.darkMuted : C.muted} />
         </Frame>)}
         <Rectangle x={9} y={278} w={22} h={1} bg={line} />
@@ -162,7 +165,7 @@
 
   function LayerRow({ y, icon = 'frame', text, depth = 0, selected = false, component = false, hidden = false, badge }) {
     const x = 12 + depth * 14
-    return <Frame name={`Слой / ${text}`} x={8} y={y} w={224} h={28} rounded={5} bg={selected ? C.blueSoft : '#00000000'}>
+    return <Frame name={`Слой / ${text}`} x={8} y={y} w={224} h={28} rounded={5} bg={selected ? C.blueSoft : undefined}>
       <I x={x} y={7} name={component ? 'component' : icon} size={14} color={component ? C.violet : selected ? C.blue : C.muted} />
       <T x={x + 21} y={7} w={160 - depth * 10} text={text} size={10} weight={selected ? 600 : 450} color={selected ? C.blue : hidden ? C.faint : C.ink} />
       {badge && <Pill x={190} y={5} w={28} h={18} text={badge} size={8} color={C.muted} bg={C.soft} />}
@@ -203,8 +206,9 @@
       <LayerRow y={542} text="Таблица" depth={2} icon="layers" />
       <Frame name="Локальное сохранение" x={0} y={724} w={240} h={72}>
         <Rectangle x={0} y={0} w={240} h={1} bg={C.line} />
-        <Ellipse x={13} y={18} w={28} h={28} bg={C.black} />
-        <T x={13} y={26} w={28} text="ВЛ" size={9} weight={700} color={C.white} align="center" />
+        <Frame name="Аватар пользователя" x={13} y={18} w={28} h={28} rounded={9999} bg={C.black}>
+          <T x={0} y={7} w={28} text="ВЛ" size={9} weight={700} color={C.white} align="center" />
+        </Frame>
         <T x={51} y={16} w={120} text="Вы · локально" size={10} weight={600} />
         <Ellipse x={52} y={39} w={6} h={6} bg={C.green} />
         <T x={64} y={35} w={130} text="Сохранено сейчас" size={9} color={C.muted} />
@@ -215,8 +219,8 @@
 
   function Field({ x, y, w = 80, label, value, dark = false, accent = false }) {
     return <Frame name={`Поле / ${label}`} x={x} y={y} w={w} h={30} rounded={5} bg={dark ? C.darkSoft : C.soft}>
-      <T x={8} y={8} w={18} text={label} size={9} color={dark ? C.darkMuted : C.muted} />
-      <T x={27} y={8} w={w - 34} text={value} size={10} weight={accent ? 650 : 500} color={accent ? C.blue : dark ? C.darkInk : C.ink} align="right" />
+      <T x={8} y={8} w={30} text={label} size={9} color={dark ? C.darkMuted : C.muted} />
+      <T x={39} y={8} w={w - 46} text={value} size={10} weight={accent ? 650 : 500} color={accent ? C.blue : dark ? C.darkInk : C.ink} align="right" />
     </Frame>
   }
 
@@ -254,7 +258,7 @@
         <Field x={12} y={39} w={122} label="W" value="172" accent />
         <Field x={142} y={39} w={126} label="H" value="88" accent />
         <T x={12} y={82} w={80} text="Направление" size={9} color={C.muted} />
-        <Pill x={184} y={75} w={84} h={24} text="Вертикально" size={9} color={C.ink} bg={C.soft} />
+        <Pill x={164} y={75} w={104} h={24} text="Вертикально" size={9} color={C.ink} bg={C.soft} />
         <Field x={12} y={108} w={122} label="↔" value="16" />
         <Field x={142} y={108} w={126} label="Gap" value="8" />
       </InspectorSection>
@@ -273,10 +277,13 @@
         <Pill x={12} y={41} w={118} h={25} text="surface/card" size={9} color={C.violet} bg={C.violetSoft} />
         <Pill x={138} y={41} w={92} h={25} text="radius/12" size={9} color={C.violet} bg={C.violetSoft} />
       </InspectorSection>
-      <Frame x={12} y={766} w={256} h={74} rounded={7} bg={C.soft}>
-        <I x={11} y={12} name="info" size={15} color={C.muted} />
-        <T x={34} y={11} w={205} text="Один жест — одна отмена" size={10} weight={600} />
-        <T x={34} y={32} w={205} text="⌘Z отменит всё изменение,\nEsc вернет состояние до жеста." size={9} color={C.muted} lineHeight={13} />
+      <InspectorSection y={742} h={86} title="Экспорт" action={null}>
+        <Button x={12} y={38} w={256} h={32} text="Экспортировать выбранное" icon="export" size={10} />
+      </InspectorSection>
+      <Frame x={12} y={840} w={256} h={48} rounded={7} bg={C.soft}>
+        <I x={11} y={9} name="info" size={15} color={C.muted} />
+        <T x={34} y={7} w={205} text="Один жест — одна отмена" size={10} weight={600} />
+        <T x={34} y={25} w={205} text="⌘Z · отменить   Esc · вернуть" size={9} color={C.muted} />
       </Frame>
     </Frame>
   }
@@ -292,7 +299,7 @@
       <Rectangle x={20} y={24} w={20} h={20} rounded={5} bg={C.black} />
       <Rectangle x={30} y={18} w={10} h={24} rotate={12} bg={C.red} />
       <T x={50} y={25} w={65} text="пульс" size={14} weight={750} />
-      {['Обзор', 'Операции', 'Цели', 'Отчёты'].map((label, i) => <Frame x={12} y={82 + i * 40} w={108} h={30} rounded={6} bg={i === 0 ? '#E8ECE6' : '#00000000'}>
+      {['Обзор', 'Операции', 'Цели', 'Отчёты'].map((label, i) => <Frame x={12} y={82 + i * 40} w={108} h={30} rounded={6} bg={i === 0 ? '#E8ECE6' : undefined}>
         <I x={9} y={8} name={i === 0 ? 'grid' : i === 1 ? 'layers' : i === 2 ? 'check' : 'image'} size={13} color={i === 0 ? C.ink : C.muted} />
         <T x={29} y={8} w={70} text={label} size={9} weight={i === 0 ? 650 : 500} color={i === 0 ? C.ink : C.muted} />
       </Frame>)}
@@ -307,12 +314,12 @@
         <I x={12} y={10} name="plus" size={14} color={C.white} />
         <T x={32} y={10} w={70} text="Добавить" size={10} weight={600} color={C.white} />
       </Frame>
-      {[['Баланс', '248 320 ₽', '+4,8%', C.black], ['Доходы', '184 200 ₽', '+12,4%', C.green], ['Расходы', '96 480 ₽', '−2,1%', C.red]].map(([label, value, delta, color], i) => {
+      {[['Баланс', '248 320 ₽', '+4,8%', C.black], ['Доходы', '184 200 ₽', '+12,4%', C.green], ['Расходы', '96 480 ₽', '−2,1%', C.redText]].map(([label, value, delta, color], i) => {
         const cx = compact ? 156 + i * 182 : 156 + i * 184
         return <Frame name={`Карточка / ${label}`} x={cx} y={statsY} w={172} h={statsH} rounded={10} bg={C.white} stroke={C.line} strokeWidth={1}>
           <T x={14} y={12} w={90} text={label} size={9} weight={550} color={C.muted} />
           <T x={14} y={compact ? 34 : 38} w={140} text={value} size={compact ? 16 : 18} weight={700} letterSpacing={-0.3} />
-          <Pill x={112} y={11} w={48} h={19} text={delta} size={8} color={color} bg={label === 'Баланс' ? C.soft : label === 'Доходы' ? C.greenSoft : '#FCEDEA'} />
+          <Pill x={104} y={11} w={56} h={19} text={delta} size={8} color={color} bg={label === 'Баланс' ? C.soft : label === 'Доходы' ? C.greenSoft : '#FCEDEA'} />
         </Frame>
       })}
       <Frame name="Динамика" x={156} y={chartY} w={364} h={220} rounded={10} bg={C.white} stroke={C.line} strokeWidth={1}>
@@ -334,7 +341,7 @@
       </Frame>
       <Frame name="Операции" x={156} y={tableY} w={540} h={150} rounded={10} bg={C.white} stroke={C.line} strokeWidth={1}>
         <T x={16} y={14} w={160} text="Последние операции" size={11} weight={650} />
-        <T x={447} y={15} w={76} text="Все операции" size={8} color={C.blue} align="right" />
+        <T x={423} y={15} w={100} text="Все операции" size={8} color={C.blue} align="right" />
         {[['СберМаркет', 'Сегодня, 14:32', '−2 840 ₽'], ['Перевод от Ильи', 'Вчера, 19:10', '+12 000 ₽'], ['Метро', 'Вчера, 08:42', '−64 ₽']].map(([name, date, amount], i) => <Frame x={12} y={42 + i * 33} w={516} h={30}>
           <Ellipse x={0} y={2} w={24} h={24} bg={i === 1 ? C.greenSoft : C.soft} />
           <T x={36} y={1} w={160} text={name} size={9} weight={550} />
@@ -343,20 +350,20 @@
         </Frame>)}
       </Frame>
       {selection && <>
-        <Rectangle name="Выделение / Карточка доходов" x={336} y={88} w={180} h={96} bg="#00000000" stroke={C.blue} strokeWidth={1.2} />
+        <Rectangle name="Выделение / Карточка доходов" x={336} y={88} w={180} h={96} bg={undefined} stroke={C.blue} strokeWidth={1.2} />
         {[0, 1, 2, 3].map(i => <Handle x={i % 2 === 0 ? 333 : 513} y={i < 2 ? 85 : 181} />)}
         <Pill x={336} y={65} w={139} h={20} text="Карточка / Доходы" size={8} color={C.white} bg={C.blue} />
         <Pill x={374} y={187} w={104} h={20} text="172 × 88" size={8} color={C.white} bg={C.blue} />
         <Rectangle x={168} y={178} w={516} h={1} bg={C.red} opacity={0.7} />
-        <Pill x={321} y={169} w={24} h={17} text="12" size={7} color={C.white} bg={C.red} />
-        <Pill x={505} y={169} w={24} h={17} text="12" size={7} color={C.white} bg={C.red} />
+        <Pill x={321} y={169} w={24} h={17} text="12" size={7} color={C.white} bg={C.redText} />
+        <Pill x={505} y={169} w={24} h={17} text="12" size={7} color={C.white} bg={C.redText} />
       </>}
       {agent && <>
-        <Rectangle x={148} y={84} w={556} h={compact ? 84 : 96} bg="#00000000" stroke={C.green} strokeWidth={1.5} strokeDash={[5, 4]} />
+        <Rectangle x={148} y={84} w={556} h={compact ? 84 : 96} bg={undefined} stroke={C.green} strokeWidth={1.5} strokeDash={[5, 4]} />
         <Pill x={148} y={61} w={122} h={21} text="1 · 5 свойств" size={8} color={C.white} bg={C.green} />
-        <Rectangle x={148} y={chartY - 8} w={380} h={228} bg="#00000000" stroke={C.green} strokeWidth={1.5} strokeDash={[5, 4]} />
+        <Rectangle x={148} y={chartY - 8} w={380} h={228} bg={undefined} stroke={C.green} strokeWidth={1.5} strokeDash={[5, 4]} />
         <Pill x={148} y={chartY - 31} w={102} h={21} text="2 · 1 свойство" size={8} color={C.white} bg={C.green} />
-        <Rectangle x={574} y={22} w={128} h={46} bg="#00000000" stroke={C.green} strokeWidth={1.5} strokeDash={[5, 4]} />
+        <Rectangle x={574} y={22} w={128} h={46} bg={undefined} stroke={C.green} strokeWidth={1.5} strokeDash={[5, 4]} />
         <Pill x={574} y={0} w={102} h={21} text="3 · 1 свойство" size={8} color={C.white} bg={C.green} />
       </>}
     </Frame>
@@ -373,7 +380,7 @@
 
   function Screen01() {
     return <Frame name="01 — Рабочее место" x={0} y={0} w={1440} h={900} bg={C.canvas} overflow="hidden">
-      <Shell left={<><LayersPanel /><StatusFooter /></>} right={<Inspector />}>
+      <Shell left={<LayersPanel />} right={<Inspector />}>
         <T x={340} y={91} w={300} text="ОБЗОР / DESKTOP · 1440 × 1024" size={9} weight={600} color={C.muted} letterSpacing={0.4} />
         <Dashboard x={340} y={122} selection />
         <Frame name="Комментарий к объекту" x={1008} y={477} w={30} h={30} rounded={15} bg={C.violet} stroke={C.white} strokeWidth={2}>
@@ -390,9 +397,9 @@
         <T x={380} y={151} w={420} text="КОМПОНЕНТ / СТАТУС · 4 × 4 PX" size={9} weight={600} color={C.darkMuted} letterSpacing={0.5} />
         <Frame name="Макет остаётся светлым" x={380} y={180} w={640} h={440} rounded={10} bg={C.white} shadow="0 16 40 #00000035">
           <Rectangle x={0} y={0} w={640} h={72} bg="#F6F7F4" />
-          <Mark x={26} y={22} s={0.18} />
+          <Mark x={26} y={22} />
           <T x={64} y={25} w={150} text="Пульс / Обзор" size={13} weight={650} />
-          <Pill x={486} y={22} w={118} h={28} text="Синхронизировано" size={8} color={C.green} bg={C.greenSoft} />
+          <Pill x={464} y={22} w={140} h={28} text="Синхронизировано" size={8} color={C.green} bg={C.greenSoft} />
           <T x={42} y={116} w={300} text="Состояние системы" size={24} weight={700} />
           <T x={42} y={157} w={390} text="Все данные сохранены на этом устройстве." size={12} color={C.muted} />
           <Frame x={42} y={206} w={556} h={92} rounded={10} bg={C.soft}>
@@ -404,14 +411,14 @@
           </Frame>
           <T x={42} y={346} w={420} text="Размеры overlay не зависят от масштаба документа." size={11} color={C.muted} />
         </Frame>
-        <Rectangle name="Выделение малого объекта" x={916} y={382} w={28} h={28} bg="#00000000" stroke={C.blue} strokeWidth={1.2} />
+        <Rectangle name="Выделение малого объекта" x={916} y={382} w={28} h={28} bg={undefined} stroke={C.blue} strokeWidth={1.2} />
         {[0, 1, 2, 3].map(i => <Handle x={i % 2 === 0 ? 913 : 941} y={i < 2 ? 379 : 407} size={7} />)}
         <Rectangle x={929} y={353} w={1} h={24} bg={C.blue} />
         <Ellipse x={926} y={347} w={7} h={7} bg={C.white} stroke={C.blue} strokeWidth={1.2} />
         <Pill x={883} y={416} w={94} h={23} text="4 × 4 px" size={9} color={C.white} bg={C.blue} />
         <Rectangle x={364} y={396} w={580} h={1} bg={C.red} opacity={0.85} />
         <Rectangle x={930} y={164} w={1} h={274} bg={C.red} opacity={0.85} />
-        <Pill x={714} y={384} w={58} h={22} text="8 px" size={8} color={C.white} bg={C.red} />
+        <Pill x={714} y={384} w={58} h={22} text="8 px" size={8} color={C.white} bg={C.redText} />
         <Frame name="Контекстная точность" x={798} y={236} w={284} h={137} rounded={9} bg={C.darkPanel} stroke={C.darkLine} strokeWidth={1} shadow="0 8 24 #00000040">
           <T x={14} y={13} w={160} text="Точность жеста" size={12} weight={650} color={C.darkInk} />
           <Pill x={197} y={10} w={72} h={23} text="400%" size={9} color="#9DBCF4" bg="#2B3B50" />
@@ -438,9 +445,9 @@
   function AgentPanel() {
     return <Frame name="Диалог с агентом" x={0} y={104} w={240} h={796}>
       <SectionTitle x={14} y={13} text="КОНТЕКСТ ЗАДАЧИ" right="3" />
-      <Frame x={12} y={37} w={216} h={87} rounded={8} bg={C.soft}>
-        <Pill x={9} y={9} w={76} h={22} text="Главная" icon="frame" size={8} color={C.ink} bg={C.panel} />
-        <Pill x={91} y={9} w={76} h={22} text="3 слоя" icon="layers" size={8} color={C.ink} bg={C.panel} />
+      <Frame x={12} y={37} w={216} h={96} rounded={8} bg={C.soft}>
+        <Pill x={9} y={9} w={86} h={22} text="Главная" icon="frame" size={8} color={C.ink} bg={C.panel} />
+        <Pill x={101} y={9} w={76} h={22} text="3 слоя" icon="layers" size={8} color={C.ink} bg={C.panel} />
         <Pill x={9} y={38} w={156} h={22} text="feature/compact" icon="branch" size={8} color={C.violet} bg={C.violetSoft} />
         <T x={10} y={68} w={190} text="Объекты привязаны по ID, не по координатам" size={7.5} color={C.muted} />
       </Frame>
@@ -458,7 +465,7 @@
           <I x={2} y={6} name="check" size={10} color={C.green} />
           <T x={22} y={4} w={165} text={text} size={8.5} color={C.ink} />
         </Frame>)}
-        <Pill x={12} y={176} w={190} h={21} text="7 правок · ничего не применено" size={8} color={C.green} bg={C.greenSoft} />
+        <Pill x={6} y={176} w={204} h={21} text="7 правок · ничего не применено" size={8} color={C.green} bg={C.greenSoft} />
       </Frame>
       <Frame x={12} y={509} w={216} h={73} rounded={8} bg={C.violetSoft}>
         <I x={11} y={12} name="branch" size={15} color={C.violet} />
@@ -478,9 +485,9 @@
   function DiffRow({ y, title, detail, checked = true, color = C.green }) {
     return <Frame name={`Правка / ${title}`} x={12} y={y} w={256} h={43} rounded={6} bg={checked ? C.greenSoft : C.soft}>
       <Checkbox x={10} y={13} checked={checked} color={color} />
-      <T x={34} y={7} w={150} text={title} size={9.5} weight={600} />
-      <T x={34} y={24} w={160} text={detail} size={8.5} color={C.muted} />
-      <T x={199} y={15} w={45} text={checked ? 'Включено' : 'Пропуск'} size={7.5} color={checked ? color : C.muted} align="right" />
+      <T x={34} y={7} w={140} text={title} size={9.5} weight={600} />
+      <T x={34} y={24} w={140} text={detail} size={8.5} color={C.muted} />
+      <T x={180} y={15} w={64} text={checked ? 'Включено' : 'Пропуск'} size={7.5} color={checked ? color : C.muted} align="right" />
     </Frame>
   }
 
@@ -522,10 +529,10 @@
   function Screen03() {
     return <Frame name="03 — Агент и проверка" x={3040} y={0} w={1440} h={900} bg={C.canvas} overflow="hidden">
       <Shell active="agent" agent branch="agent/compact-cards · предпросмотр" left={<AgentPanel />} right={<AgentReview />}>
-        <Frame name="Режимы сравнения агента" x={585} y={72} w={230} h={32} rounded={7} bg={C.panel} stroke={C.line} strokeWidth={1}>
+        <Frame name="Режимы сравнения агента" x={575} y={72} w={250} h={32} rounded={7} bg={C.panel} stroke={C.line} strokeWidth={1}>
           <T x={10} y={9} w={55} text="Было" size={9} color={C.muted} align="center" />
           <Frame x={70} y={4} w={76} h={24} rounded={5} bg={C.greenSoft}><T x={0} y={6} w={76} text="Стало" size={9} weight={650} color={C.green} align="center" /></Frame>
-          <T x={153} y={9} w={67} text="Наложение" size={9} color={C.muted} align="center" />
+          <T x={153} y={9} w={87} text="Наложение" size={9} color={C.muted} align="center" />
         </Frame>
         <T x={340} y={116} w={300} text="ПУЛЬС / ОБЗОР · CHANGES 1—3" size={9} weight={600} color={C.green} letterSpacing={0.4} />
         <Dashboard x={340} y={146} compact agent />
@@ -535,8 +542,8 @@
   }
 
   function GitChange({ y, icon = 'frame', text, meta, type = 'changed', selected = false }) {
-    const color = type === 'added' ? C.green : type === 'deleted' ? C.red : C.amber
-    return <Frame name={`Git / ${text}`} x={8} y={y} w={224} h={43} rounded={6} bg={selected ? C.amberSoft : '#00000000'}>
+    const color = type === 'added' ? C.green : type === 'deleted' ? C.redText : C.amber
+    return <Frame name={`Git / ${text}`} x={8} y={y} w={224} h={43} rounded={6} bg={selected ? C.amberSoft : undefined}>
       <I x={10} y={9} name={icon} size={14} color={selected ? C.amber : C.muted} />
       <T x={31} y={7} w={152} text={text} size={9.5} weight={selected ? 650 : 500} />
       <T x={31} y={24} w={158} text={meta} size={8} color={C.muted} />
@@ -557,8 +564,8 @@
       {conflict ? <>
         <GitChange y={151} icon="component" text="Карточка / Доходы" meta="2 конфликта свойств" selected />
         <GitChange y={199} icon="image" text="Иконка / Уведомления" meta="Удалена / изменена" type="deleted" />
-        <GitChange y={247} icon="frame" text="Динамика" meta="Объединено автоматически" type="added" />
-        <GitChange y={295} icon="type" text="Заголовок" meta="Объединено автоматически" type="added" />
+        <GitChange y={247} icon="frame" text="Динамика" meta="Автообъединение" type="added" />
+        <GitChange y={295} icon="type" text="Заголовок" meta="Автообъединение" type="added" />
       </> : <>
         <GitChange y={151} icon="component" text="Карточка / Доходы" meta="5 свойств · 88 → 76 px" selected />
         <GitChange y={199} icon="component" text="Карточка / Баланс" meta="3 свойства" />
@@ -573,7 +580,7 @@
         <Ellipse x={7} y={8} w={11} h={11} bg={color} stroke={C.panel} strokeWidth={2} />
         <T x={30} y={3} w={145} text={text} size={9.5} weight={i === 0 ? 650 : 500} />
         <T x={30} y={24} w={110} text={`${hash} · Вы`} size={8} color={C.muted} />
-        <T x={171} y={24} w={38} text={time} size={8} color={C.faint} align="right" />
+        <T x={154} y={24} w={55} text={time} size={8} color={C.faint} align="right" />
       </Frame>)}
       <StatusFooter text={conflict ? 'Слияние не завершено' : 'Git · рабочая копия чистая'} />
     </Frame>
@@ -583,11 +590,12 @@
     return <Frame name={`Версия / ${label}`} x={x} y={y} w={360} h={430} rounded={9} bg={C.white} shadow="0 8 24 #28342A12" overflow="hidden">
       <Rectangle x={0} y={0} w={76} h={430} bg="#F7F8F5" />
       <Rectangle x={14} y={18} w={15} h={15} rounded={4} bg={C.black} />
-      <T x={35} y={18} w={35} text="пульс" size={9} weight={700} />
-      {[0, 1, 2, 3].map(i => <Frame x={9} y={62 + i * 31} w={58} h={23} rounded={4} bg={i === 0 ? '#E8ECE6' : '#00000000'}><T x={7} y={6} w={46} text={['Обзор', 'Счета', 'Цели', 'Отчёт'][i]} size={6.5} color={i === 0 ? C.ink : C.muted} /></Frame>)}
+      <T x={35} y={18} w={48} text="пульс" size={9} weight={700} />
+      {[0, 1, 2, 3].map(i => <Frame x={9} y={62 + i * 31} w={58} h={23} rounded={4} bg={i === 0 ? '#E8ECE6' : undefined}><T x={7} y={6} w={46} text={['Обзор', 'Счета', 'Цели', 'Отчёт'][i]} size={6.5} color={i === 0 ? C.ink : C.muted} /></Frame>)}
       <T x={94} y={23} w={150} text="Добрый день, Анна" size={compact ? 11 : 12} weight={700} />
-      <Rectangle x={282} y={18} w={60} h={23} rounded={5} bg={C.black} />
-      <T x={282} y={25} w={60} text="+ Добавить" size={6.5} weight={600} color={C.white} align="center" />
+      <Frame name="Главное действие миниатюры" x={270} y={18} w={72} h={24} rounded={6} bg={C.black}>
+        <T x={0} y={6} w={72} text="+ Добавить" size={6.5} weight={600} color={C.white} align="center" />
+      </Frame>
       {[0, 1, 2].map(i => <Frame x={94 + i * 84} y={66} w={78} h={compact ? 54 : 62} rounded={6} bg={C.white} stroke={i === 1 ? accent : C.line} strokeWidth={i === 1 ? 1.5 : 1}>
         <T x={7} y={7} w={54} text={['Баланс', 'Доходы', 'Расходы'][i]} size={6} color={C.muted} />
         <T x={7} y={25} w={64} text={['248 320', '184 200', '96 480'][i]} size={compact ? 8 : 9} weight={700} />
@@ -604,8 +612,8 @@
         <T x={19} y={55} w={40} text="72%" size={9} weight={700} color={C.white} align="center" />
       </Frame>
       <Frame x={94} y={compact ? 270 : 282} w={248} h={126} rounded={6} bg={C.white} stroke={C.line} strokeWidth={1}>
-        <T x={9} y={9} w={100} text="Последние операции" size={7} weight={650} />
-        {[0, 1, 2].map(i => <Frame x={9} y={31 + i * 28} w={230} h={23}><Ellipse x={0} y={2} w={18} h={18} bg={C.soft} /><T x={27} y={3} w={110} text={['СберМаркет', 'Перевод от Ильи', 'Метро'][i]} size={6.5} /><T x={167} y={3} w={55} text={['−2 840 ₽', '+12 000 ₽', '−64 ₽'][i]} size={6.5} align="right" /></Frame>)}
+        <T x={9} y={9} w={150} text="Последние операции" size={7} weight={650} />
+        {[0, 1, 2].map(i => <Frame x={9} y={31 + i * 28} w={230} h={23}><Ellipse x={0} y={2} w={18} h={18} bg={C.soft} /><T x={27} y={3} w={110} text={['СберМаркет', 'Перевод от Ильи', 'Метро'][i]} size={6.5} /><T x={140} y={3} w={82} text={['−2 840 ₽', '+12 000 ₽', '−64 ₽'][i]} size={6.5} align="right" /></Frame>)}
       </Frame>
     </Frame>
   }
@@ -615,7 +623,7 @@
       <Frame x={0} y={0} w={280} h={69}>
         <I x={14} y={20} name="branch" size={17} color={C.amber} />
         <T x={42} y={15} w={190} text="Изменения на холсте" size={13} weight={700} />
-        <T x={42} y={38} w={190} text="main…feature/compact · 6 объектов" size={9} color={C.muted} />
+        <T x={42} y={38} w={220} text="main…feature/compact · 6 объектов" size={9} color={C.muted} />
         <Rectangle x={0} y={68} w={280} h={1} bg={C.line} />
       </Frame>
       <SectionTitle x={14} y={87} w={250} text="ВЫБРАННЫЙ ОБЪЕКТ" right="Δ5" color={C.amber} />
@@ -665,7 +673,7 @@
         <MiniDashboard x={280} y={180} label="main" accent={C.faint} />
         <MiniDashboard x={760} y={180} compact label="Рабочая" accent={C.amber} />
         <I x={690} y={372} name="arrow" size={26} color={C.amber} />
-        <Pill x={632} y={628} w={136} h={28} text="6 объектов изменено" size={9} color={C.amber} bg={C.amberSoft} />
+        <Pill x={615} y={628} w={170} h={28} text="6 объектов изменено" size={9} color={C.amber} bg={C.amberSoft} />
         <Frame x={391} y={701} w={618} h={67} rounded={8} bg={C.panel} stroke={C.line} strokeWidth={1}>
           <I x={13} y={13} name="link" size={16} color={C.blue} />
           <T x={40} y={11} w={550} text="Сравнение привязано к объектам, а не к пиксельным снимкам" size={10} weight={650} />
@@ -683,7 +691,7 @@
         <Frame x={20} y={18} w={210} h={h} rounded={8} bg={C.white} stroke={accent} strokeWidth={1.2}>
           <T x={pad} y={pad} w={100} text="Доходы" size={9} color={C.muted} />
           <T x={pad} y={pad + 23} w={150} text="184 200 ₽" size={h > 80 ? 18 : 16} weight={700} />
-          <Pill x={150} y={pad} w={45} h={18} text="+12,4%" size={7} color={C.green} bg={C.greenSoft} />
+          <Pill x={139} y={pad} w={56} h={18} text="+12,4%" size={7} color={C.green} bg={C.greenSoft} />
         </Frame>
         <T x={20} y={116} w={210} text={`H ${h} · отступ ${pad}`} size={8} color={accent} align="center" />
       </Frame>
@@ -728,14 +736,14 @@
       <Frame x={12} y={392} w={256} h={89} rounded={7} bg={C.soft}>
         <T x={12} y={11} w={230} text="Результат: H 76 · отступ 16" size={10} weight={650} />
         <T x={12} y={35} w={230} text="Новая комбинация проверена на холсте до завершения merge." size={8.5} color={C.muted} lineHeight={12} />
-        <Pill x={12} y={60} w={118} h={20} text="Нет потери данных" size={7.5} color={C.green} bg={C.greenSoft} />
+        <Pill x={12} y={60} w={140} h={20} text="Нет потери данных" size={7.5} color={C.green} bg={C.greenSoft} />
       </Frame>
       <SectionTitle x={14} y={508} w={250} text="СЛЕДУЮЩИЙ КОНФЛИКТ" right="2" />
       <Frame x={12} y={533} w={256} h={77} rounded={7} bg="#FCEDEA">
         <I x={11} y={11} name="trash" size={15} color={C.red} />
         <T x={34} y={9} w={205} text="Иконка / Уведомления" size={9.5} weight={650} />
         <T x={34} y={29} w={205} text="Удалена в main, изменена в ветке" size={8} color={C.muted} />
-        <T x={34} y={52} w={90} text="Удалить" size={8.5} weight={600} color={C.red} />
+        <T x={34} y={52} w={90} text="Удалить" size={8.5} weight={600} color={C.redText} />
         <T x={148} y={52} w={90} text="Восстановить" size={8.5} weight={600} color={C.blue} align="right" />
       </Frame>
       <Button x={12} y={647} w={256} h={36} text="Применить к следующему" icon="arrow" />
@@ -782,4 +790,3 @@
     <Screen04 />
     <Screen05 />
   </>
-})()}
