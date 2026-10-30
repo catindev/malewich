@@ -171,7 +171,22 @@ describe('editor store', () => {
     expect(getPageDocument(restored, 'page-1').nodes.map((node) => node.id)).toEqual(['frame', 'child']);
   });
 
-  it('groups pages without deleting them when the group is removed', () => {
+  it('reorders a flat page list and persists an independent page background', () => {
+    const store = useEditorStore.getState();
+    store.addPage('Вторая');
+    const secondId = getActivePageId(useEditorStore.getState().doc);
+    useEditorStore.getState().addPage('Третья');
+    const thirdId = getActivePageId(useEditorStore.getState().doc);
+    useEditorStore.getState().movePageTo(thirdId, 'page-1');
+    expect(getDocumentPages(useEditorStore.getState().doc).map((page) => page.id)).toEqual([thirdId, 'page-1', secondId]);
+    useEditorStore.getState().setPageBackground('page-1', '#f3e8d3');
+    expect(getDocumentPages(useEditorStore.getState().doc).find((page) => page.id === 'page-1')?.background).toBe('#f3e8d3');
+    expect(getDocumentPages(useEditorStore.getState().doc).find((page) => page.id === secondId)?.background).toBeUndefined();
+    useEditorStore.getState().undo();
+    expect(getDocumentPages(useEditorStore.getState().doc).find((page) => page.id === 'page-1')?.background).toBeUndefined();
+  });
+
+  it('keeps legacy page groups compatible without requiring them in the UI', () => {
     const store = useEditorStore.getState();
     store.addPageGroup('Продукт');
     const groupId = useEditorStore.getState().doc.pageGroups![0].id;
@@ -182,5 +197,58 @@ describe('editor store', () => {
     const doc = useEditorStore.getState().doc;
     expect(doc.pageGroups).toEqual([]);
     expect(getDocumentPages(doc).find((page) => page.id === pageId)).toMatchObject({ name: 'Экраны', groupId: null });
+  });
+
+  it('shares page projections only within the same immutable document and page', () => {
+    const store = useEditorStore.getState();
+    store.addPage('Вторая');
+    const doc = useEditorStore.getState().doc;
+    const active = getPageDocument(doc);
+    const first = getPageDocument(doc, 'page-1');
+    expect(getPageDocument(doc)).toBe(active);
+    expect(getPageDocument(doc, 'page-1')).toBe(first);
+    expect(active).not.toBe(first);
+    const renamed = { ...doc, name: 'Новое имя' };
+    expect(getPageDocument(renamed)).not.toBe(active);
+    expect(getPageDocument(renamed).nodes).toEqual(active.nodes);
+    expect(getPageDocument(renamed, 'page-1')).not.toBe(first);
+  });
+
+  it('keeps instance geometry and identities when a main tree only translates', () => {
+    const store = useEditorStore.getState();
+    store.createComponent('frame');
+    store.createInstance('frame');
+    const before = useEditorStore.getState().doc;
+    const instanceId = useEditorStore.getState().selection[0];
+    const instanceRoot = getNode(before, instanceId)!;
+    const instanceChild = before.nodes.find((node) => node.parentId === instanceId)!;
+    store.transient((doc) => ({
+      ...doc,
+      nodes: doc.nodes.map((node) => ['frame', 'child'].includes(node.id)
+        ? { ...node, x: node.x + 24, y: node.y + 8 }
+        : node),
+    }), { preserveRelativeGeometry: true });
+    const after = useEditorStore.getState().doc;
+    expect(getNode(after, 'frame')).toMatchObject({ x: 24, y: 8 });
+    expect(getNode(after, instanceId)).toBe(instanceRoot);
+    expect(getNode(after, instanceChild.id)).toBe(instanceChild);
+    expect(getNode(after, instanceId)).toMatchObject({ x: instanceRoot.x, y: instanceRoot.y });
+    expect(getNode(after, instanceChild.id)).toMatchObject({ x: instanceChild.x, y: instanceChild.y });
+  });
+
+  it('skips no-op history work but detects a changed nested snapshot', () => {
+    const store = useEditorStore.getState();
+    const before = useEditorStore.getState();
+    store.commit((doc) => doc);
+    expect(useEditorStore.getState()).toBe(before);
+    store.recordSnapshot(before.doc);
+    expect(useEditorStore.getState()).toBe(before);
+    const snapshot = {
+      ...before.doc,
+      nodes: before.doc.nodes.map((node) => node.id === 'child' ? { ...node, x: node.x + 1 } : node),
+    };
+    store.recordSnapshot(snapshot);
+    expect(useEditorStore.getState().past).toHaveLength(before.past.length + 1);
+    expect(useEditorStore.getState().past.at(-1)).toBe(snapshot);
   });
 });

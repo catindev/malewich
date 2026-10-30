@@ -1,6 +1,10 @@
 import type { DesignDocument, EditorNode, PageDefinition } from '../types';
 import { getDescendantIds, getNode } from './document';
 
+// All canvas/panel consumers need the same immutable projection. Sharing it
+// avoids repeating the same page traversal in every React component.
+const pageDocumentCache = new WeakMap<DesignDocument, Map<string, DesignDocument>>();
+
 export const LEGACY_PAGE_ID = 'page-1';
 
 export function getDocumentPages(doc: DesignDocument): PageDefinition[] {
@@ -23,8 +27,17 @@ export function getPageNodeIds(doc: DesignDocument, pageId = getActivePageId(doc
 }
 
 export function getPageDocument(doc: DesignDocument, pageId = getActivePageId(doc)): DesignDocument {
+  let projections = pageDocumentCache.get(doc);
+  const cached = projections?.get(pageId);
+  if (cached) return cached;
   const ids = getPageNodeIds(doc, pageId);
-  return { ...doc, activePageId: pageId, nodes: doc.nodes.filter((node) => ids.has(node.id)) };
+  const projected = { ...doc, activePageId: pageId, nodes: doc.nodes.filter((node) => ids.has(node.id)) };
+  if (!projections) {
+    projections = new Map();
+    pageDocumentCache.set(doc, projections);
+  }
+  projections.set(pageId, projected);
+  return projected;
 }
 
 export function getNodePageId(doc: DesignDocument, node: EditorNode): string {

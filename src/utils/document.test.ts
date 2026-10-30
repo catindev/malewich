@@ -7,6 +7,7 @@ import {
   duplicateNodes,
   getDescendantIds,
   getWorldMatrix,
+  isDocumentContentEqual,
   removeNodes,
   reorderNode,
 } from './document';
@@ -65,5 +66,21 @@ describe('document model', () => {
     ]);
     const result = reorderNode(doc.nodes, 'first', 'up');
     expect(result.map((node) => node.id)).toEqual(['root', 'second', 'outside', 'first']);
+  });
+
+  it('compares serializable content while preserving immutable history semantics', () => {
+    const doc = withNodes([frame('root'), rectangle('child', 'root')]);
+    expect(isDocumentContentEqual(doc, doc)).toBe(true);
+    expect(isDocumentContentEqual(doc, structuredClone(doc))).toBe(true);
+    const withUndefined = {
+      ...doc,
+      nodes: [{ ...doc.nodes[0], layout: undefined }, ...doc.nodes.slice(1)],
+    };
+    expect(isDocumentContentEqual(doc, withUndefined)).toBe(true);
+    expect(isDocumentContentEqual(doc, { ...doc, updatedAt: 'later' })).toBe(false);
+    expect(isDocumentContentEqual(doc, {
+      ...doc,
+      nodes: [{ ...doc.nodes[0], x: doc.nodes[0].x + 1 }, ...doc.nodes.slice(1)],
+    })).toBe(false);
   });
 });
