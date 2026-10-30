@@ -2,7 +2,7 @@ import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent }
 import type { DesignDocument, EditorNode, Matrix } from '../types';
 import { getChildren } from '../utils/document';
 import { matrixToString, nodeMatrix } from '../utils/geometry';
-import { getTextLines } from '../utils/text';
+import { fontFamilyWithFallback, getTextLines } from '../utils/text';
 
 interface SceneNodeProps {
   doc: DesignDocument;
@@ -33,7 +33,7 @@ function TextContent({ node }: { node: Extract<EditorNode, { type: 'text' }> }) 
           y={node.y}
           fill={node.fill}
           fontSize={node.fontSize}
-          fontFamily={node.fontFamily}
+          fontFamily={fontFamilyWithFallback(node.fontFamily)}
           fontWeight={node.fontWeight}
           letterSpacing={node.letterSpacing}
           textAnchor={node.textAlign === 'center' ? 'middle' : node.textAlign === 'right' ? 'end' : 'start'}
@@ -122,7 +122,7 @@ export function SceneNode({
           {node.src ? (
             <image
               href={node.src} x={node.x} y={node.y} width={node.width} height={node.height}
-              preserveAspectRatio="xMidYMid slice" clipPath={`url(#clip-${node.id})`}
+              preserveAspectRatio={node.objectFit === 'fill' ? 'none' : 'xMidYMid slice'} clipPath={`url(#clip-${node.id})`}
             />
           ) : (
             <rect x={node.x} y={node.y} width={node.width} height={node.height} fill="#e8e8e8" stroke="#c8c8c8" />

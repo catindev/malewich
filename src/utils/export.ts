@@ -8,7 +8,7 @@ import {
   isDescendant,
 } from './document';
 import { matrixToString, mergeBounds, nodeMatrix, round } from './geometry';
-import { getTextLines } from './text';
+import { fontFamilyWithFallback, getTextLines } from './text';
 
 function escapeXml(value: string): string {
   return value.replace(/[<>&"']/g, (character) => ({
@@ -46,10 +46,10 @@ function renderNode(doc: DesignDocument, node: EditorNode, root = false): string
     if (node.autoSize === 'none') {
       content += `<defs><clipPath id="${clipId}"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"/></clipPath></defs>`;
     }
-    content += `<g${node.autoSize === 'none' ? ` clip-path="url(#${clipId})"` : ''}><text fill="${escapeXml(node.fill)}" font-size="${node.fontSize}" font-family="${escapeXml(node.fontFamily)}" font-weight="${node.fontWeight}" letter-spacing="${node.letterSpacing}" text-anchor="${anchor}">${lines}</text></g>`;
+    content += `<g${node.autoSize === 'none' ? ` clip-path="url(#${clipId})"` : ''}><text fill="${escapeXml(node.fill)}" font-size="${node.fontSize}" font-family="${escapeXml(fontFamilyWithFallback(node.fontFamily))}" font-weight="${node.fontWeight}" letter-spacing="${node.letterSpacing}" text-anchor="${anchor}">${lines}</text></g>`;
   } else if (node.type === 'image') {
     content += `<defs><clipPath id="export-clip-${node.id}"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${node.cornerRadius}"/></clipPath></defs>`;
-    if (node.src) content += `<image href="${escapeXml(node.src)}" x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" preserveAspectRatio="xMidYMid slice" clip-path="url(#export-clip-${node.id})"/>`;
+    if (node.src) content += `<image href="${escapeXml(node.src)}" x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" preserveAspectRatio="${node.objectFit === 'fill' ? 'none' : 'xMidYMid slice'}" clip-path="url(#export-clip-${node.id})"/>`;
   }
 
   if (children.length > 0) {

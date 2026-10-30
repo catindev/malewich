@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { DesignDocument, TextNode } from '../types';
 import { getWorldMatrix } from '../utils/document';
 import { matrixToString } from '../utils/geometry';
+import { fontFamilyWithFallback } from '../utils/text';
 
 interface TextEditorProps {
   doc: DesignDocument;
@@ -45,7 +46,7 @@ export function TextEditor({ doc, node, onChange, onFinish, selectAll = false }:
         style={{
           color: node.fill,
           fontSize: node.fontSize,
-          fontFamily: node.fontFamily,
+          fontFamily: fontFamilyWithFallback(node.fontFamily),
           fontWeight: node.fontWeight,
           lineHeight: node.lineHeight,
           letterSpacing: node.letterSpacing,

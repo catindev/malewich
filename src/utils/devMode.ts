@@ -1,4 +1,5 @@
 import type { DesignDocument, EditorNode, VariableDefinition } from '../types';
+import { fontFamilyWithFallback } from './text';
 
 function cssName(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9а-я]+/gi, '-').replace(/^-+|-+$/g, '') || 'node';
@@ -43,7 +44,7 @@ export function nodeToCss(doc: DesignDocument, node: EditorNode): string {
   }
   if (node.type === 'text') {
     lines.push(
-      `  font-family: ${node.fontFamily};`,
+      `  font-family: ${fontFamilyWithFallback(node.fontFamily)};`,
       `  font-size: ${node.fontSize}px;`,
       `  font-weight: ${node.fontWeight};`,
       `  line-height: ${node.lineHeight};`,
