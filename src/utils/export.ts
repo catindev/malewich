@@ -98,18 +98,24 @@ export function downloadBlob(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function exportSvg(doc: DesignDocument, selection: string[]): void {
+export function exportSvg(doc: DesignDocument, selection: string[], name = doc.name): void {
   const { svg } = documentToSvg(doc, selection);
-  downloadBlob(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }), `${safeFileName(doc.name)}.svg`);
+  downloadBlob(new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }), `${safeFileName(name)}.svg`);
 }
 
 export function exportJson(doc: DesignDocument): void {
   downloadBlob(new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' }), `${safeFileName(doc.name)}.malewich.json`);
 }
 
-export async function exportPng(doc: DesignDocument, selection: string[]): Promise<void> {
+interface PngExportOptions {
+  scale?: number;
+  name?: string;
+}
+
+export async function exportPng(doc: DesignDocument, selection: string[], options: PngExportOptions = {}): Promise<void> {
   const { svg, bounds } = documentToSvg(doc, selection);
-  const scale = Math.min(3, 8192 / Math.max(bounds.width, bounds.height, 1));
+  const requestedScale = Math.max(0.01, options.scale ?? 3);
+  const scale = Math.min(requestedScale, 8192 / Math.max(bounds.width, bounds.height, 1));
   const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   try {
@@ -128,7 +134,8 @@ export async function exportPng(doc: DesignDocument, selection: string[]): Promi
     const png = await new Promise<Blob>((resolve, reject) => {
       canvas.toBlob((result) => result ? resolve(result) : reject(new Error('Не удалось экспортировать PNG')), 'image/png');
     });
-    downloadBlob(png, `${safeFileName(doc.name)}@${Math.round(scale)}x.png`);
+    const scaleLabel = String(Math.round(scale * 100) / 100);
+    downloadBlob(png, `${safeFileName(options.name ?? doc.name)}@${scaleLabel}x.png`);
   } finally {
     URL.revokeObjectURL(url);
   }

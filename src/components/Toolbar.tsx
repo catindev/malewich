@@ -22,13 +22,13 @@ const tools: { id: Tool; label: string; shortcut: string; icon: typeof Frame }[]
   { id: 'image', label: 'Изображение', shortcut: 'I', icon: ImageIcon },
 ];
 
-export function Toolbar() {
+export function Toolbar({ hidden = false }: { hidden?: boolean }) {
   const tool = useEditorStore((state) => state.tool);
   const setTool = useEditorStore((state) => state.setTool);
   const [helpOpen, setHelpOpen] = useState(false);
 
   return (
-    <nav className="tool-rail" aria-label="Инструменты">
+    <nav className="tool-rail" aria-label="Инструменты" hidden={hidden}>
       <div className="tool-rail-main">
         {tools.map(({ id, label, shortcut, icon: Icon }, index) => (
           <div key={id} className={index === 2 || index === 5 ? 'tool-group-start' : ''}>

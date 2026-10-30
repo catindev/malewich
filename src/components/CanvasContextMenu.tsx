@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -10,6 +11,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
+import { getPageRoots } from '../utils/pages';
 
 interface CanvasContextMenuProps {
   x: number;
@@ -31,6 +33,17 @@ export function CanvasContextMenu({ x, y, onClose, onFitSelection, onCreateFrame
   const doc = useEditorStore((state) => state.doc);
   const hasSelection = selection.length > 0;
 
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', close, true);
+    return () => window.removeEventListener('keydown', close, true);
+  }, [onClose]);
+
   const run = (action: () => void) => {
     action();
     onClose();
@@ -48,7 +61,7 @@ export function CanvasContextMenu({ x, y, onClose, onFitSelection, onCreateFrame
         <button disabled={selection.length !== 1} onClick={() => run(() => reorder(selection[0], 'up'))}><ArrowUp size={14} /><span>Выше по слою</span><kbd>]</kbd></button>
         <button disabled={selection.length !== 1} onClick={() => run(() => reorder(selection[0], 'down'))}><ArrowDown size={14} /><span>Ниже по слою</span><kbd>[</kbd></button>
         <div className="popover-divider" />
-        <button onClick={() => run(() => setSelection(doc.nodes.filter((node) => node.parentId === null && node.visible).map((node) => node.id)))}>
+        <button onClick={() => run(() => setSelection(getPageRoots(doc).filter((node) => node.visible).map((node) => node.id)))}>
           <SquareDashed size={14} /><span>Выбрать всё</span><kbd>⌘A</kbd>
         </button>
         <button disabled={!hasSelection} onClick={() => run(onFitSelection)}><Maximize2 size={14} /><span>Вписать выделение</span><kbd>⇧2</kbd></button>

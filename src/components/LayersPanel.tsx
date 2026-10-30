@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
   ChevronDown,
   ChevronRight,
@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   Frame,
+  Group,
   Image as ImageIcon,
   Layers3,
   Lock,
@@ -20,12 +21,15 @@ import {
   Unlock,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
-import type { DesignDocument, EditorNode, NodeType } from '../types';
+import type { EditorNode, NodeType } from '../types';
 import { LibraryPanel } from './LibraryPanel';
 import { usePageDocument } from '../hooks/usePageDocument';
 import { PagesPanel } from './PagesPanel';
 import { getAncestors, getNode } from '../utils/document';
-import { getActivePageId, getDocumentPages } from '../utils/pages';
+import { getActivePageId } from '../utils/pages';
+import { LayerContextMenu } from './LayerContextMenu';
+import { ProjectControls } from './Topbar';
+import { ZoomControls } from './ZoomControls';
 
 const typeIcons: Record<NodeType, typeof Frame> = {
   frame: Frame,
@@ -39,6 +43,7 @@ const typeIcons: Record<NodeType, typeof Frame> = {
 function layerKind(node: EditorNode): { label: string; Icon: typeof Frame; className: string } {
   if (node.component?.role === 'main') return { label: 'Main component', Icon: Component, className: 'is-main-component' };
   if (node.component?.role === 'instance') return { label: 'Instance', Icon: Diamond, className: 'is-instance' };
+  if (node.type === 'frame' && node.isGroup) return { label: 'Группа', Icon: Group, className: '' };
   if (node.type === 'frame' && node.autoLayout) {
     return node.autoLayout.direction === 'horizontal'
       ? { label: 'Auto Layout · горизонтальный', Icon: Columns3, className: 'is-auto-layout' }
@@ -52,7 +57,6 @@ function layerKind(node: EditorNode): { label: string; Icon: typeof Frame; class
 }
 
 interface LayerRowProps {
-  doc: DesignDocument;
   childrenByParent: ReadonlyMap<string | null, EditorNode[]>;
   node: EditorNode;
   depth: number;
@@ -60,9 +64,10 @@ interface LayerRowProps {
   setCollapsed: (collapsed: Set<string>) => void;
   renaming: string | null;
   setRenaming: (id: string | null) => void;
+  onOpenContextMenu: (event: ReactMouseEvent<HTMLDivElement>, node: EditorNode) => void;
 }
 
-function LayerRow({ doc, childrenByParent, node, depth, collapsed, setCollapsed, renaming, setRenaming }: LayerRowProps) {
+function LayerRowComponent({ childrenByParent, node, depth, collapsed, setCollapsed, renaming, setRenaming, onOpenContextMenu }: LayerRowProps) {
   const selection = useEditorStore((state) => state.selection);
   const setSelection = useEditorStore((state) => state.setSelection);
   const updateNode = useEditorStore((state) => state.updateNode);
@@ -119,6 +124,7 @@ function LayerRow({ doc, childrenByParent, node, depth, collapsed, setCollapsed,
           setDraftName(node.name);
           setRenaming(node.id);
         }}
+        onContextMenu={(event) => onOpenContextMenu(event, node)}
       >
         {children.length > 0 ? (
           <button
@@ -172,22 +178,79 @@ function LayerRow({ doc, childrenByParent, node, depth, collapsed, setCollapsed,
       </div>
       {isExpanded && children.slice().reverse().map((child) => (
         <LayerRow
-          key={child.id} doc={doc} childrenByParent={childrenByParent} node={child} depth={depth + 1}
+          key={child.id} childrenByParent={childrenByParent} node={child} depth={depth + 1}
           collapsed={collapsed} setCollapsed={setCollapsed}
-          renaming={renaming} setRenaming={setRenaming}
+          renaming={renaming} setRenaming={setRenaming} onOpenContextMenu={onOpenContextMenu}
         />
       ))}
     </>
   );
 }
 
-export function LayersPanel() {
+function sameChildIds(left: EditorNode[] | undefined, right: EditorNode[] | undefined): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((node, index) => node.id === right[index].id);
+}
+
+function sameLayerDisplay(before: EditorNode, after: EditorNode): boolean {
+  return before.id === after.id && before.name === after.name && before.type === after.type &&
+    before.parentId === after.parentId && before.visible === after.visible && before.locked === after.locked &&
+    before.component?.role === after.component?.role &&
+    (before.type !== 'frame' || after.type !== 'frame' || (before.autoLayout?.direction === after.autoLayout?.direction && before.isGroup === after.isGroup)) &&
+    (before.type !== 'text' || after.type !== 'text' || before.text === after.text);
+}
+
+function sameLayerSubtreeDisplay(
+  previousChildren: ReadonlyMap<string | null, EditorNode[]>,
+  nextChildren: ReadonlyMap<string | null, EditorNode[]>,
+  before: EditorNode,
+  after: EditorNode,
+): boolean {
+  if (!sameLayerDisplay(before, after)) return false;
+  const previousNodes = previousChildren.get(after.id);
+  const nextNodes = nextChildren.get(after.id);
+  if (!sameChildIds(previousNodes, nextNodes)) return false;
+  return nextNodes?.every((child, index) => sameLayerSubtreeDisplay(
+    previousChildren,
+    nextChildren,
+    previousNodes![index],
+    child,
+  )) ?? true;
+}
+
+function layerRowPropsEqual(previous: LayerRowProps, next: LayerRowProps): boolean {
+  if (previous.depth !== next.depth || previous.setCollapsed !== next.setCollapsed ||
+    previous.setRenaming !== next.setRenaming || previous.onOpenContextMenu !== next.onOpenContextMenu) return false;
+  // These contextual values must reach nested rows even when an ancestor's own
+  // display state is unchanged. They change only on explicit UI actions.
+  if (previous.collapsed !== next.collapsed || previous.renaming !== next.renaming) return false;
+  // A memoized ancestor must not hide a descendant's text/name/kind update.
+  // Transform-only document changes still skip the complete visible row tree.
+  return sameLayerSubtreeDisplay(
+    previous.childrenByParent,
+    next.childrenByParent,
+    previous.node,
+    next.node,
+  );
+}
+
+const LayerRow = memo(LayerRowComponent, layerRowPropsEqual);
+
+interface LayersPanelProps {
+  hidden?: boolean;
+  panelsVisible: boolean;
+  onTogglePanels: () => void;
+}
+
+export function LayersPanel({ hidden = false, panelsVisible, onTogglePanels }: LayersPanelProps) {
   const doc = usePageDocument();
   const selection = useEditorStore((state) => state.selection);
   const reorder = useEditorStore((state) => state.reorder);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [renaming, setRenaming] = useState<string | null>(null);
   const [tab, setTab] = useState<'layers' | 'library'>('layers');
+  const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   const layersTreeRef = useRef<HTMLDivElement>(null);
   const selectionKey = selection.join('|');
   const activePageId = getActivePageId(doc);
@@ -201,6 +264,13 @@ export function LayersPanel() {
     return map;
   }, [doc.nodes]);
   const roots = (childrenByParent.get(null) ?? []).slice().reverse();
+  const openLayerContextMenu = useCallback((event: ReactMouseEvent<HTMLDivElement>, node: EditorNode) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const state = useEditorStore.getState();
+    if (!state.selection.includes(node.id)) state.setSelection([node.id]);
+    setContextMenu({ nodeId: node.id, x: event.clientX, y: event.clientY });
+  }, []);
 
   useEffect(() => {
     if (doc.preserveSavedGeometry) {
@@ -233,9 +303,21 @@ export function LayersPanel() {
   }, [selectionKey, collapsed, tab, activePageId]);
 
   return (
-    <aside className="layers-panel panel">
-      <header className="panel-header">
-        <div><Layers3 size={15} /><span>{tab === 'layers' ? 'Слои' : 'Библиотека'}</span>{tab === 'layers' && <span className="count-badge">{doc.nodes.length}</span>}</div>
+    <aside
+      className="layers-panel panel" hidden={hidden}
+      onContextMenu={(event) => {
+        if (event.target instanceof HTMLElement && event.target.closest('input, textarea, [contenteditable="true"]')) return;
+        event.preventDefault();
+      }}
+    >
+      <ProjectControls panelsVisible={panelsVisible} onTogglePanels={onTogglePanels} />
+      <header className="panel-header layers-panel-header">
+        <div className="panel-tabs">
+          <button className={tab === 'layers' ? 'is-active' : ''} onClick={() => setTab('layers')}>
+            <span>Слои</span>{tab === 'layers' && <span className="count-badge">{doc.nodes.length}</span>}
+          </button>
+          <button className={tab === 'library' ? 'is-active' : ''} onClick={() => setTab('library')}>Библиотека</button>
+        </div>
         {tab === 'layers' && selection.length === 1 && (
           <div className="panel-header-actions">
             <button title="Выше по слою" onClick={() => reorder(selection[0], 'up')}><ChevronUp size={15} /></button>
@@ -243,18 +325,14 @@ export function LayersPanel() {
           </div>
         )}
       </header>
-      <PagesPanel />
-      <div className="panel-tabs">
-        <button className={tab === 'layers' ? 'is-active' : ''} onClick={() => setTab('layers')}>Слои</button>
-        <button className={tab === 'library' ? 'is-active' : ''} onClick={() => setTab('library')}>Библиотека</button>
-      </div>
+      {tab === 'layers' && <PagesPanel />}
       {tab === 'layers' ? (
         <div className="layers-tree" ref={layersTreeRef}>
           {roots.length > 0 ? roots.map((node) => (
             <LayerRow
-              key={node.id} doc={doc} childrenByParent={childrenByParent} node={node} depth={0}
+              key={node.id} childrenByParent={childrenByParent} node={node} depth={0}
               collapsed={collapsed} setCollapsed={setCollapsed}
-              renaming={renaming} setRenaming={setRenaming}
+              renaming={renaming} setRenaming={setRenaming} onOpenContextMenu={openLayerContextMenu}
             />
           )) : (
             <div className="layers-empty">
@@ -264,10 +342,16 @@ export function LayersPanel() {
           )}
         </div>
       ) : <LibraryPanel />}
-      <div className="layers-footer">
-        <span>{getDocumentPages(doc).find((page) => page.id === activePageId)?.name ?? 'Страница 1'}</span>
-        <span>{doc.nodes.length} объектов</span>
-      </div>
+      <footer className="layers-footer">
+        <div className="layers-footer-summary">
+          <span>{doc.nodes.length} объектов</span>
+        </div>
+        <ZoomControls />
+      </footer>
+      {contextMenu && <LayerContextMenu
+        {...contextMenu} onClose={() => setContextMenu(null)}
+        onRename={() => setRenaming(contextMenu.nodeId)}
+      />}
     </aside>
   );
 }

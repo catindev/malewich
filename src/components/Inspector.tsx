@@ -24,9 +24,6 @@ import {
   Minus,
   MousePointer2,
   Plus,
-  RotateCw,
-  SlidersHorizontal,
-  Trash2,
   Unlock,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
@@ -36,6 +33,10 @@ import { getNode } from '../utils/document';
 import { measureAutoText } from '../utils/text';
 import { DevPanel } from './DevPanel';
 import { usePageDocument } from '../hooks/usePageDocument';
+import { getActivePageId, getDocumentPages } from '../utils/pages';
+import { LayerContextMenu } from './LayerContextMenu';
+import { ActionControls } from './Topbar';
+import { ExportSection } from './ExportSection';
 
 interface NumberFieldProps {
   label: string;
@@ -118,9 +119,9 @@ function ColorField({ label, value, onCommit }: { label: string; value: string; 
   );
 }
 
-function PropertySection({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
+function PropertySection({ title, children, action, className = '' }: { title: string; children: ReactNode; action?: ReactNode; className?: string }) {
   return (
-    <section className="property-section">
+    <section className={`property-section ${className}`}>
       <div className="property-section-heading"><h3>{title}</h3>{action}</div>
       {children}
     </section>
@@ -142,13 +143,17 @@ function TextContentField({ value, onCommit }: { value: string; onCommit: (value
   );
 }
 
-export function Inspector() {
+interface InspectorProps {
+  hidden?: boolean;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
+}
+
+export function Inspector({ hidden = false, theme, onToggleTheme }: InspectorProps) {
   const doc = usePageDocument();
   const selection = useEditorStore((state) => state.selection);
   const updateNode = useEditorStore((state) => state.updateNode);
   const updateSelection = useEditorStore((state) => state.updateSelection);
-  const deleteSelection = useEditorStore((state) => state.deleteSelection);
-  const duplicateSelection = useEditorStore((state) => state.duplicateSelection);
   const alignSelection = useEditorStore((state) => state.alignSelection);
   const createComponent = useEditorStore((state) => state.createComponent);
   const createInstance = useEditorStore((state) => state.createInstance);
@@ -158,14 +163,20 @@ export function Inspector() {
   const detachInstance = useEditorStore((state) => state.detachInstance);
   const addPrototypeLink = useEditorStore((state) => state.addPrototypeLink);
   const removePrototypeLink = useEditorStore((state) => state.removePrototypeLink);
+  const renamePage = useEditorStore((state) => state.renamePage);
+  const setPageBackground = useEditorStore((state) => state.setPageBackground);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [devMode, setDevMode] = useState(false);
+  const [mode, setMode] = useState<'design' | 'prototype'>('design');
+  const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   const selectedNodes = selection.flatMap((id) => {
     const node = getNode(doc, id);
     return node ? [node] : [];
   });
   const node = selectedNodes.length === 1 ? selectedNodes[0] : undefined;
   const parentNode = node?.parentId ? getNode(doc, node.parentId) : undefined;
+  const activePageId = getActivePageId(doc);
+  const activePage = getDocumentPages(doc).find((page) => page.id === activePageId);
   const updateTextProperties = (patch: Partial<TextNode>) => {
     if (!node || node.type !== 'text') return;
     const nextNode = { ...node, ...patch };
@@ -179,27 +190,73 @@ export function Inspector() {
     reader.readAsDataURL(file);
   };
 
-  return (
-    <aside className="inspector panel">
-      <header className="panel-header">
-        <div><SlidersHorizontal size={15} /><span>{devMode ? 'Dev Mode' : 'Инспектор'}</span></div>
-        <div className="panel-header-actions">
-          <button className={devMode ? 'is-active' : ''} title="Dev Mode" aria-pressed={devMode} onClick={() => setDevMode(!devMode)}><Code2 size={14} /></button>
-        </div>
-        {node && (
-          <div className="panel-header-actions">
-            <button title={node.locked ? 'Разблокировать' : 'Заблокировать'} onClick={() => updateNode(node.id, { locked: !node.locked })}>
-              {node.locked ? <Lock size={14} /> : <Unlock size={14} />}
-            </button>
-            <button title={node.visible ? 'Скрыть' : 'Показать'} onClick={() => updateNode(node.id, { visible: !node.visible })}>
-              {node.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-            </button>
+  const renderPrototypeSection = () => {
+    if (!node || node.type !== 'frame') return null;
+    const link = (doc.prototypeLinks ?? []).find((item) => item.sourceFrameId === node.id);
+    const targets = doc.nodes.filter((candidate) => candidate.type === 'frame' && candidate.parentId === null && candidate.id !== node.id);
+    return (
+      <PropertySection title="Взаимодействие" className="prototype-properties">
+        <label className="inspector-field-label" htmlFor="prototype-target">Переход к экрану</label>
+        <select
+          id="prototype-target" className="font-select" aria-label="Цель перехода" value={link?.targetFrameId ?? ''}
+          onChange={(event) => {
+            if (event.target.value) addPrototypeLink(node.id, event.target.value, link?.transition, link?.duration);
+            else if (link) removePrototypeLink(link.id);
+          }}
+        >
+          <option value="">Нет перехода</option>
+          {targets.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}
+        </select>
+        {link && (
+          <div className="property-grid">
+            <select className="font-select" aria-label="Тип перехода" value={link.transition} onChange={(event) => addPrototypeLink(node.id, link.targetFrameId, event.target.value as 'instant' | 'dissolve' | 'slide', link.duration)}>
+              <option value="instant">Instant</option>
+              <option value="dissolve">Dissolve</option>
+              <option value="slide">Slide</option>
+            </select>
+            <NumberField label="мс" value={link.duration} min={0} max={3000} step={50} onCommit={(duration) => addPrototypeLink(node.id, link.targetFrameId, link.transition, duration)} />
           </div>
         )}
+        <p className="property-hint">В Presentation связь срабатывает по клику, кнопке «Дальше» или стрелке вправо.</p>
+      </PropertySection>
+    );
+  };
+
+  return (
+    <aside
+      className="inspector panel" hidden={hidden}
+      onContextMenu={(event) => {
+        if (event.target instanceof HTMLElement && event.target.closest('input, textarea, [contenteditable="true"]')) return;
+        event.preventDefault();
+        if (node) setContextMenu({ nodeId: node.id, x: event.clientX, y: event.clientY });
+      }}
+    >
+      <ActionControls theme={theme} onToggleTheme={onToggleTheme} />
+      <header className="panel-header inspector-header">
+        <div className="inspector-mode-tabs" role="tablist" aria-label="Режим инспектора">
+          <button role="tab" aria-selected={!devMode && mode === 'design'} className={!devMode && mode === 'design' ? 'is-active' : ''} onClick={() => { setMode('design'); setDevMode(false); }}>Дизайн</button>
+          <button role="tab" aria-selected={!devMode && mode === 'prototype'} className={!devMode && mode === 'prototype' ? 'is-active' : ''} onClick={() => { setMode('prototype'); setDevMode(false); }}>Прототип</button>
+        </div>
+        <div className="panel-header-actions">
+          <button className={devMode ? 'is-active' : ''} title="Dev Mode" aria-pressed={devMode} onClick={() => setDevMode(!devMode)}><Code2 size={14} /></button>
+          {node && <button title={node.locked ? 'Разблокировать' : 'Заблокировать'} onClick={() => updateNode(node.id, { locked: !node.locked })}>
+            {node.locked ? <Lock size={14} /> : <Unlock size={14} />}
+          </button>}
+          {node && <button title={node.visible ? 'Скрыть' : 'Показать'} onClick={() => updateNode(node.id, { visible: !node.visible })}>
+            {node.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+          </button>}
+        </div>
       </header>
       <div className="inspector-scroll">
-        {devMode ? <DevPanel doc={doc} nodes={selectedNodes} /> : <>
+        {devMode ? <DevPanel doc={doc} nodes={selectedNodes} /> : mode === 'prototype' ? (
+          node?.type === 'frame' ? renderPrototypeSection() : <div className="prototype-empty"><MousePointer2 size={22} /><p>Выберите фрейм, чтобы настроить переход.</p></div>
+        ) : <>
         {!node && selectedNodes.length === 0 && (
+          <>
+          <PropertySection title="Страница" className="page-properties">
+            <TextField value={activePage?.name ?? 'Страница 1'} ariaLabel="Название активной страницы" onCommit={(name) => renamePage(activePageId, name)} />
+            <ColorField label="Фон страницы" value={activePage?.background ?? (document.documentElement.dataset.theme === 'dark' ? '#161617' : '#ededed')} onCommit={(background) => setPageBackground(activePageId, background)} />
+          </PropertySection>
           <div className="inspector-empty">
             <div className="inspector-empty-icon"><MousePointer2 size={23} /></div>
             <h2>Ничего не выбрано</h2>
@@ -215,6 +272,7 @@ export function Inspector() {
               <small>{doc.nodes.length} объектов · версия 1</small>
             </div>
           </div>
+          </>
         )}
         {!node && selectedNodes.length > 1 && (
           <>
@@ -253,7 +311,7 @@ export function Inspector() {
                   </span>
                 ) : node.type === 'frame' && node.autoLayout ? null : (
                   <span className={`node-type-pill is-${node.type}`}>
-                    {node.type === 'rectangle' || node.type === 'ellipse' ? 'Фигура' : node.type === 'frame' && !node.autoLayout ? 'Фрейм' : node.type === 'text' ? 'Текст' : node.type === 'vector' ? 'Вектор' : node.type === 'image' ? 'Изображение' : ''}
+                    {node.type === 'rectangle' || node.type === 'ellipse' ? 'Фигура' : node.type === 'frame' && !node.autoLayout ? node.isGroup ? 'Группа' : 'Фрейм' : node.type === 'text' ? 'Текст' : node.type === 'vector' ? 'Вектор' : node.type === 'image' ? 'Изображение' : ''}
                   </span>
                 )}
                 {node.type === 'frame' && node.autoLayout && (
@@ -265,7 +323,15 @@ export function Inspector() {
               </div>
               <TextField value={node.name} ariaLabel="Название слоя" onCommit={(name) => updateNode(node.id, { name: name.trim() || node.name })} />
             </div>
-            <PropertySection title="Макет">
+            <PropertySection title="Позиция" className="position-properties">
+              <div className="alignment-tools" aria-label="Выравнивание объекта">
+                <button title="По левому краю" onClick={() => alignSelection('left')}><AlignHorizontalJustifyStart size={16} /></button>
+                <button title="По центру по горизонтали" onClick={() => alignSelection('horizontal-center')}><AlignHorizontalJustifyCenter size={16} /></button>
+                <button title="По правому краю" onClick={() => alignSelection('right')}><AlignHorizontalJustifyEnd size={16} /></button>
+                <button title="По верхнему краю" onClick={() => alignSelection('top')}><AlignVerticalJustifyStart size={16} /></button>
+                <button title="По центру по вертикали" onClick={() => alignSelection('vertical-center')}><AlignVerticalJustifyCenter size={16} /></button>
+                <button title="По нижнему краю" onClick={() => alignSelection('bottom')}><AlignVerticalJustifyEnd size={16} /></button>
+              </div>
               <div className="property-grid">
                 <NumberField label="X" value={node.x} onCommit={(x) => updateNode(node.id, { x })} />
                 <NumberField label="Y" value={node.y} onCommit={(y) => updateNode(node.id, { y })} />
@@ -332,38 +398,6 @@ export function Inspector() {
               )}
             </PropertySection>
             {node.type === 'frame' && (
-              <PropertySection title="Прототип">
-                {(() => {
-                  const link = (doc.prototypeLinks ?? []).find((item) => item.sourceFrameId === node.id);
-                  const targets = doc.nodes.filter((candidate) => candidate.type === 'frame' && candidate.parentId === null && candidate.id !== node.id);
-                  return (
-                    <>
-                      <select
-                        className="font-select" aria-label="Цель перехода" value={link?.targetFrameId ?? ''}
-                        onChange={(event) => {
-                          if (event.target.value) addPrototypeLink(node.id, event.target.value, link?.transition, link?.duration);
-                          else if (link) removePrototypeLink(link.id);
-                        }}
-                      >
-                        <option value="">Нет перехода</option>
-                        {targets.map((target) => <option key={target.id} value={target.id}>{target.name}</option>)}
-                      </select>
-                      {link && (
-                        <>
-                          <select className="font-select" aria-label="Тип перехода" value={link.transition} onChange={(event) => addPrototypeLink(node.id, link.targetFrameId, event.target.value as 'instant' | 'dissolve' | 'slide', link.duration)}>
-                            <option value="instant">Instant</option>
-                            <option value="dissolve">Dissolve</option>
-                            <option value="slide">Slide</option>
-                          </select>
-                          <NumberField label="Длительность" value={link.duration} min={0} max={3000} step={50} suffix="ms" onCommit={(duration) => addPrototypeLink(node.id, link.targetFrameId, link.transition, duration)} />
-                        </>
-                      )}
-                    </>
-                  );
-                })()}
-              </PropertySection>
-            )}
-            {node.type === 'frame' && (
               <PropertySection
                 title="Auto Layout"
                 action={<button
@@ -425,27 +459,26 @@ export function Inspector() {
                 })()}
               </PropertySection>
             )}
-            {'fill' in node && (
-              <PropertySection title="Заливка и обводка">
-                <ColorField label="Заливка" value={node.fill} onCommit={(fill) => updateNode(node.id, { fill })} />
-                <ColorField label="Обводка" value={node.stroke} onCommit={(stroke) => updateNode(node.id, { stroke })} />
-                <NumberField label="Толщина" value={node.strokeWidth} min={0} max={100} onCommit={(strokeWidth) => updateNode(node.id, { strokeWidth })} />
-              </PropertySection>
-            )}
             <PropertySection title="Внешний вид">
-              <label className="range-property">
-                <span>Непрозрачность</span><span>{Math.round(node.opacity * 100)}%</span>
-                <input type="range" min="0" max="1" step="0.01" value={node.opacity} onChange={(event) => updateNode(node.id, { opacity: Number(event.target.value) })} />
-              </label>
-              {'cornerRadius' in node && (
-                <NumberField label="Скругление" value={node.cornerRadius} min={0} max={500} onCommit={(cornerRadius) => updateNode(node.id, { cornerRadius })} />
-              )}
+              <div className="appearance-grid">
+                <NumberField label="Непрозрачность" value={Math.round(node.opacity * 100)} min={0} max={100} suffix="%" onCommit={(opacity) => updateNode(node.id, { opacity: opacity / 100 })} />
+                {'cornerRadius' in node && <NumberField label="Радиус" value={node.cornerRadius} min={0} max={500} onCommit={(cornerRadius) => updateNode(node.id, { cornerRadius })} />}
+              </div>
               {node.type === 'frame' && (
                 <label className="checkbox-property">
                   <input type="checkbox" checked={node.clip} onChange={(event) => updateNode(node.id, { clip: event.target.checked })} />
                   <span>Обрезать содержимое</span>
                 </label>
               )}
+            </PropertySection>
+            {'fill' in node && (
+              <PropertySection title="Заливка" className="paint-section">
+                <ColorField label="Заливка" value={node.fill} onCommit={(fill) => updateNode(node.id, { fill })} />
+              </PropertySection>
+            )}
+            <PropertySection title="Обводка" className="paint-section">
+              <ColorField label="Обводка" value={node.stroke} onCommit={(stroke) => updateNode(node.id, { stroke })} />
+              <NumberField label="Толщина" value={node.strokeWidth} min={0} max={100} onCommit={(strokeWidth) => updateNode(node.id, { strokeWidth })} />
             </PropertySection>
             {node.type === 'text' && (
               <PropertySection title="Текст">
@@ -492,17 +525,10 @@ export function Inspector() {
             )}
           </>
         )}
+        {selectedNodes.length > 0 && <ExportSection doc={doc} selection={selection} />}
         </>}
       </div>
-      {selectedNodes.length > 0 && (
-        <div className="inspector-actions">
-          <button onClick={duplicateSelection}><Copy size={15} /><span>Дублировать</span></button>
-          <button className="danger-action" onClick={deleteSelection}><Trash2 size={15} /><span>Удалить</span></button>
-        </div>
-      )}
-      {node && node.rotation !== 0 && (
-        <button className="reset-rotation" onClick={() => updateNode(node.id, { rotation: 0 })}><RotateCw size={13} /> Сбросить поворот</button>
-      )}
+      {contextMenu && <LayerContextMenu {...contextMenu} onClose={() => setContextMenu(null)} />}
     </aside>
   );
 }
