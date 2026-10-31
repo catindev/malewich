@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { GraphicsPath } from 'pixi.js';
 import { describe, expect, it } from 'vitest';
 import { importFigmaDocument } from './figmaImport';
-import { MAX_ZOOM, MIN_ZOOM, previewOverscan, textResolutionForZoom, vectorFillPaths } from './rendering';
+import { dashVectorPath, MAX_ZOOM, MIN_ZOOM, previewOverscan, textResolutionForZoom, vectorFillPaths, vectorScale } from './rendering';
 
 function holes(data: string): number {
   return new GraphicsPath().addPath(new GraphicsPath(data, true)).shapePath.shapePrimitives
@@ -27,6 +27,22 @@ describe('canvas text resolution', () => {
     expect(previewOverscan(1000, 800)).toBe(100);
     expect(previewOverscan(2560, 1440)).toBe(128);
     expect(previewOverscan(0, 800)).toBe(0);
+  });
+});
+
+describe('Figma line rendering helpers', () => {
+  it('keeps zero-width and zero-height vectors renderable', () => {
+    expect(vectorScale({ width: 120, height: 0, pathWidth: 120, pathHeight: 0.01 })).toEqual({ x: 1, y: 1 });
+    expect(vectorScale({ width: 0, height: 80, pathWidth: 0.01, pathHeight: 80 })).toEqual({ x: 1, y: 1 });
+  });
+
+  it('expands dashed paths while preserving their editable source geometry', () => {
+    const source = 'M0 0L12 0';
+    const dashed = dashVectorPath(source, [3, 3]);
+    expect(dashed).not.toBe(source);
+    expect(dashed).toContain('M0 0');
+    expect(dashed).toContain('L3 0');
+    expect(dashed).toContain('M6 0');
   });
 });
 

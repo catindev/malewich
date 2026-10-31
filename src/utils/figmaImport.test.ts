@@ -125,8 +125,8 @@ describe('TCB.PAY import', () => {
   it('keeps both SMZ pages populated in their original coordinate spaces', () => {
     const doc = importSmzFixture();
     expect(doc.pages).toEqual([
-      { id: 'fig-page-0', name: 'Справки' },
-      { id: 'fig-page-1', name: 'Уведомления' },
+      { id: 'fig-page-0', name: 'Справки', background: '#cccccc' },
+      { id: 'fig-page-1', name: 'Уведомления', background: '#cccccc' },
     ]);
     expect(doc.nodes).toHaveLength(4477);
     expect(doc.nodes.find((node) => node.id === 'fig-0-253')).toMatchObject({ pageId: 'fig-page-0', x: 200, y: 482 });
@@ -199,5 +199,30 @@ describe('Community FIG regressions', () => {
     const image = doc.nodes.find((node) => node.id === 'fig-0-85');
     expect(image).toMatchObject({ type: 'image', objectFit: 'fill' });
     expect(image?.type === 'image' && image.src.startsWith('data:image/png;base64,')).toBe(true);
+  });
+});
+
+describe('Lines, paints and page backgrounds', () => {
+  it('imports Transit lines as editable stroked vectors and preserves Figma page backgrounds', () => {
+    const doc = importCommunityFixture('Transit.Lines.fig');
+    expect(doc.pages).toEqual([
+      { id: 'fig-page-0', name: 'wip', background: '#394869' },
+      { id: 'fig-page-1', name: 'demo', background: '#153d52' },
+    ]);
+    const lines = doc.nodes.filter((node) => node.type === 'vector' && (node.width === 0 || node.height === 0));
+    expect(lines.length).toBeGreaterThan(100);
+    expect(lines.some((node) => node.type === 'vector' && node.path.includes('L'))).toBe(true);
+    expect(doc.nodes.some((node) => node.type === 'vector' && node.strokeDash?.length &&
+      node.strokeCap === 'butt' && node.strokeJoin === 'miter')).toBe(true);
+  });
+
+  it('imports linear and radial gradient paints without losing vector geometry', () => {
+    const doc = importCommunityFixture('BestProjects.Tracker.fig');
+    expect(doc.pages).toEqual([{ id: 'fig-page-0', name: 'Page 1', background: '#ffffff' }]);
+    const gradients = doc.nodes.filter((node) => node.fillGradient);
+    expect(gradients.length).toBeGreaterThan(0);
+    expect(new Set(gradients.map((node) => node.fillGradient!.type))).toEqual(new Set(['linear', 'radial']));
+    expect(gradients.every((node) => node.fillGradient!.stops.length >= 2)).toBe(true);
+    expect(doc.nodes.some((node) => node.type === 'vector' && node.strokeCap === 'round')).toBe(true);
   });
 });
