@@ -3,6 +3,8 @@ import type { DesignDocument, EditorNode, Matrix } from '../types';
 import { getChildren } from '../utils/document';
 import { matrixToString, nodeMatrix } from '../utils/geometry';
 import { fontFamilyWithFallback, getTextLines } from '../utils/text';
+import { fillReference, gradientId, svgGradientTransform } from '../utils/paints';
+import { vectorScale } from '../utils/rendering';
 
 interface SceneNodeProps {
   doc: DesignDocument;
@@ -13,6 +15,29 @@ interface SceneNodeProps {
   editingId?: string | null;
   suppressedIds?: Set<string>;
   worldTransform?: Matrix;
+}
+
+function GradientDefinition({ node }: { node: EditorNode }) {
+  const gradient = node.fillGradient;
+  if (!gradient) return null;
+  const stops = gradient.stops.map((stop, index) => (
+    <stop key={index} offset={stop.position} stopColor={stop.color} />
+  ));
+  return (
+    <defs>
+      {gradient.type === 'linear' ? (
+        <linearGradient
+          id={gradientId(node)} gradientUnits="objectBoundingBox"
+          x1={0} y1={0.5} x2={1} y2={0.5} gradientTransform={svgGradientTransform(gradient.transform)}
+        >{stops}</linearGradient>
+      ) : (
+        <radialGradient
+          id={gradientId(node)} gradientUnits="objectBoundingBox"
+          cx={0.5} cy={0.5} r={0.5} gradientTransform={svgGradientTransform(gradient.transform)}
+        >{stops}</radialGradient>
+      )}
+    </defs>
+  );
 }
 
 function TextContent({ node }: { node: Extract<EditorNode, { type: 'text' }> }) {
@@ -31,7 +56,7 @@ function TextContent({ node }: { node: Extract<EditorNode, { type: 'text' }> }) 
         <text
           x={x}
           y={node.y}
-          fill={node.fill}
+          fill={fillReference(node)}
           fontSize={node.fontSize}
           fontFamily={fontFamilyWithFallback(node.fontFamily)}
           fontWeight={node.fontWeight}
@@ -57,11 +82,15 @@ export function SceneNode({
   const children = getChildren(doc, node.id);
   const insideStrokeClip = node.strokeAlign === 'inside' ? `url(#stroke-clip-${node.id})` : undefined;
   const common = {
-    fill: 'fill' in node ? node.fill : '#ffffff',
+    fill: fillReference(node),
     stroke: node.stroke,
     strokeWidth: node.strokeWidth * (node.strokeAlign === 'inside' ? 2 : 1),
+    strokeDasharray: node.strokeDash?.join(' '),
+    strokeLinecap: node.strokeCap,
+    strokeLinejoin: node.strokeJoin,
     clipPath: insideStrokeClip,
   };
+  const scale = node.type === 'vector' ? vectorScale(node) : null;
 
   return (
     <g
@@ -73,6 +102,7 @@ export function SceneNode({
       onContextMenu={(event) => onNodeContextMenu(event, node)}
       className={`scene-node scene-node--${node.type}${node.locked ? ' is-locked' : ''}`}
     >
+      <GradientDefinition node={node} />
       {node.type === 'frame' && (
         <>
           <rect
@@ -103,11 +133,12 @@ export function SceneNode({
           </clipPath>}
         </>
       )}
-      {node.type === 'vector' && (
-        <g transform={`translate(${node.x} ${node.y}) scale(${node.width / node.pathWidth} ${node.height / node.pathHeight})`}>
+      {node.type === 'vector' && scale && (
+        <g transform={`translate(${node.x} ${node.y}) scale(${scale.x} ${scale.y})`}>
           <path
-            d={node.path} fill={node.fill} fillRule={node.fillRule}
+            d={node.path} fill={fillReference(node)} fillRule={node.fillRule}
             stroke={node.stroke} strokeWidth={node.strokeWidth}
+            strokeDasharray={node.strokeDash?.join(' ')} strokeLinecap={node.strokeCap} strokeLinejoin={node.strokeJoin}
           />
         </g>
       )}
@@ -117,7 +148,11 @@ export function SceneNode({
       {node.type === 'image' && (
         <>
           <clipPath id={`clip-${node.id}`}>
-            <rect x={node.x} y={node.y} width={node.width} height={node.height} rx={node.cornerRadius} />
+            {node.clipShape === 'ellipse' ? (
+              <ellipse cx={node.x + node.width / 2} cy={node.y + node.height / 2} rx={node.width / 2} ry={node.height / 2} />
+            ) : (
+              <rect x={node.x} y={node.y} width={node.width} height={node.height} rx={node.cornerRadius} />
+            )}
           </clipPath>
           {node.src ? (
             <image

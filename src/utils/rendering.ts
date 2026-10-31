@@ -1,4 +1,6 @@
 import { GraphicsPath, Polygon } from 'pixi.js';
+import { parseSVGPath } from '@open-pencil/scene-graph/parse-path';
+import type { EditorNode, VectorNode } from '../types';
 
 export const MIN_ZOOM = 0.05;
 export const MAX_ZOOM = 256;
@@ -16,6 +18,112 @@ export function textResolutionForZoom(zoom: number, devicePixelRatio = 1): numbe
 export function previewOverscan(width: number, height: number): number {
   if (!(width > 0 && height > 0)) return 0;
   return Math.min(128, Math.min(width, height) / 8);
+}
+
+/** A zero-width/height Figma line still has a visible stroke or expanded outline. */
+export function vectorScale(node: Pick<VectorNode, 'width' | 'height' | 'pathWidth' | 'pathHeight'>): { x: number; y: number } {
+  return {
+    x: node.width === 0 ? 1 : node.width / node.pathWidth,
+    y: node.height === 0 ? 1 : node.height / node.pathHeight,
+  };
+}
+
+interface DashPoint { x: number; y: number }
+
+/** Flatten only for stroking; the editable document retains the original curves. */
+export function dashVectorPath(data: string, pattern: number[]): string {
+  const intervals = pattern.filter((value) => Number.isFinite(value) && value > 0);
+  if (intervals.length === 0 || !data) return data;
+  const network = parseSVGPath(data);
+  if (network.segments.length === 0) return data;
+  const number = (value: number) => String(Math.abs(value) < 0.0005 ? 0 : Number(value.toFixed(3)));
+  const point = (value: DashPoint) => `${number(value.x)} ${number(value.y)}`;
+  const commands: string[] = [];
+  let patternIndex = 0;
+  let remaining = intervals[0];
+  let drawing = true;
+  let dashOpen = false;
+  let previousVertex = -1;
+
+  for (const segment of network.segments) {
+    if (segment.start !== previousVertex) {
+      patternIndex = 0;
+      remaining = intervals[0];
+      drawing = true;
+      dashOpen = false;
+    }
+    const start = network.vertices[segment.start];
+    const end = network.vertices[segment.end];
+    const controlA = { x: start.x + segment.tangentStart.x, y: start.y + segment.tangentStart.y };
+    const controlB = { x: end.x + segment.tangentEnd.x, y: end.y + segment.tangentEnd.y };
+    const curved = segment.tangentStart.x !== 0 || segment.tangentStart.y !== 0 || segment.tangentEnd.x !== 0 || segment.tangentEnd.y !== 0;
+    const steps = curved ? 24 : 1;
+    let from = start;
+    for (let stepIndex = 1; stepIndex <= steps; stepIndex += 1) {
+      const t = stepIndex / steps;
+      const u = 1 - t;
+      const to = curved ? {
+        x: u * u * u * start.x + 3 * u * u * t * controlA.x + 3 * u * t * t * controlB.x + t * t * t * end.x,
+        y: u * u * u * start.y + 3 * u * u * t * controlA.y + 3 * u * t * t * controlB.y + t * t * t * end.y,
+      } : end;
+      const length = Math.hypot(to.x - from.x, to.y - from.y);
+      if (length > 0.000001) {
+        const at = (distance: number): DashPoint => ({
+          x: from.x + (to.x - from.x) * distance / length,
+          y: from.y + (to.y - from.y) * distance / length,
+        });
+        let travelled = 0;
+        while (travelled < length - 0.000001) {
+          const step = Math.min(remaining, length - travelled);
+          const next = at(travelled + step);
+          if (drawing) {
+            if (!dashOpen) commands.push(`M${point(at(travelled))}`);
+            commands.push(`L${point(next)}`);
+            dashOpen = true;
+          } else dashOpen = false;
+          travelled += step;
+          remaining -= step;
+          if (remaining <= 0.000001) {
+            patternIndex = (patternIndex + 1) % intervals.length;
+            remaining = intervals[patternIndex];
+            drawing = !drawing;
+            dashOpen = false;
+          }
+        }
+      }
+      from = to;
+    }
+    previousVertex = segment.end;
+  }
+  return commands.join(' ');
+}
+
+/** Pixel-space outline used only when a shape stroke needs native-style dashes in Pixi. */
+export function shapeOutlinePath(node: EditorNode): string {
+  const { x, y, width: w, height: h } = node;
+  if (node.type === 'ellipse') {
+    const rx = w / 2;
+    const ry = h / 2;
+    const cx = x + rx;
+    const cy = y + ry;
+    const k = 0.5522847498;
+    return [
+      `M${cx + rx} ${cy}`,
+      `C${cx + rx} ${cy + k * ry} ${cx + k * rx} ${cy + ry} ${cx} ${cy + ry}`,
+      `C${cx - k * rx} ${cy + ry} ${cx - rx} ${cy + k * ry} ${cx - rx} ${cy}`,
+      `C${cx - rx} ${cy - k * ry} ${cx - k * rx} ${cy - ry} ${cx} ${cy - ry}`,
+      `C${cx + k * rx} ${cy - ry} ${cx + rx} ${cy - k * ry} ${cx + rx} ${cy} Z`,
+    ].join(' ');
+  }
+  const radius = 'cornerRadius' in node ? Math.min(node.cornerRadius, w / 2, h / 2) : 0;
+  if (radius <= 0) return `M${x} ${y}H${x + w}V${y + h}H${x}Z`;
+  return [
+    `M${x + radius} ${y}H${x + w - radius}`,
+    `Q${x + w} ${y} ${x + w} ${y + radius}V${y + h - radius}`,
+    `Q${x + w} ${y + h} ${x + w - radius} ${y + h}H${x + radius}`,
+    `Q${x} ${y + h} ${x} ${y + h - radius}V${y + radius}`,
+    `Q${x} ${y} ${x + radius} ${y}Z`,
+  ].join(' ');
 }
 
 interface VectorContour {

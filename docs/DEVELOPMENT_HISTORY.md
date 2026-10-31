@@ -69,11 +69,14 @@ Auto Layout был реализован как scoped resolver, а не как C
 - Expanded `strokeGeometry` заливается paint без повторной обводки.
 - Если derived fill/stroke geometry отсутствует, `vectorNetwork` преобразуется в SVG curves и open segments; прямоугольная заглушка не подменяет иконку.
 - Figma `isMask` сохраняется в модели, а mask-контур не рисуется как обычная заливка. Это убирает чёрные подложки логотипов, но не означает полноценную поддержку всех mask compositing modes.
-- Видимые Figma-страницы сохраняются как страницы Malewich; Internal Only Canvas пропускается.
+- Видимые Figma-страницы сохраняются как страницы Malewich; Internal Only Canvas пропускается. Явный `backgroundPaints`/`backgroundColor` страницы сохраняется в `PageDefinition.background` и не смешивается с theme default.
+- Figma LINE с нулевой шириной или высотой остаётся видимым vector stroke: масштабирование защищает нулевую ось, а `dashPattern`, cap и join проходят в общую модель и SVG/WebGL/export.
+- Проверенные linear/radial gradient paints сохраняют stops и transform; WebGL создаёт локальный `FillGradient`, SVG/export — собственные definitions. Это ограниченный проверенный контур, а не общая поддержка всех Figma paints.
+- Декодирование `.fig` вынесено в module Worker с transfer `ArrayBuffer`. Это уменьшает блокировку UI на больших файлах, но не отменяет необходимость проверять cold import, persistence и renderer после reload.
 
 ### Осознанные ограничения
 
-Нельзя заявлять полную Figma parity. Gradients, image fills на векторах и контейнерах с детьми, `CROP`/`TILE`, произвольный `imageTransform`, effects, маски, mixed text runs и все правила Variant sets не считаются полностью поддержанными. Проверенные TCB.PAY, UI Prep и Globbb не доказывают корректность любого `.fig`.
+Нельзя заявлять полную Figma parity. Проверены только linear/radial gradients в поддержанном shape/vector контуре; image fills на векторах и контейнерах с детьми, `CROP`/`TILE`, произвольный `imageTransform`, effects, маски, mixed text runs и все правила Variant sets не считаются полностью поддержанными. Проверенные TCB.PAY, UI Prep, Globbb, Transit Lines и BestProjects не доказывают корректность любого `.fig`.
 
 Служебные frame labels нельзя удалять только из-за кажущегося дублирования: в исходном макете могут быть собственные текстовые заголовки рядом с фреймами.
 
@@ -260,7 +263,9 @@ Text measurement и wrapping кэшируются в design-space, измере�
 
 Сохранение больше не выполняет повторную сериализацию резервного JSON. Устаревшая миграция хранилищ удалена; поддерживаются только текущие IndexedDB и localStorage форматы Malewich.
 
-Прогрессивная покадровая сборка страниц не внедрена. Холодный импорт включает декодирование и шрифты, а retained page scenes уже устраняют повторное создание при возврате и отменяют устаревшие клики. Разбиение дерева на промежуточные состояния добавило бы сложность и работу без доказанного улучшения. Raster damage и корневой RenderTexture по-прежнему не используются.
+Прогрессивная покадровая сборка страниц не внедрена. Холодный импорт включает Worker-декодирование и шрифты, а retained page scenes уже устраняют повторное создание при возврате и отменяют устаревшие клики. Разбиение дерева на промежуточные состояния добавило бы сложность и работу без доказанного улучшения. Raster damage и корневой RenderTexture по-прежнему не используются.
+
+Для последующих изменений renderer/import/pages обязательна performance-regression проверка: повторяется последний релевантный compositor/import сценарий, сравниваются JS/React latency, native rasterization и persistence, а не только `data-render-ms`. Software-WebGL измерения используются как диагностический baseline конкретного окружения, не как общий benchmark.
 
 ## 12. Регрессионный ориентир
 
@@ -273,6 +278,6 @@ Text measurement и wrapping кэшируются в design-space, измере�
 - nested move pixel equality;
 - страницы, группы, Presentation, themes, selection scroll и CSS highlighting.
 
-Текущий проверенный контур: **96 unit-тестов**, **58 browser-сценариев** и production TypeScript/Vite build. Дополнительно он включает DocumentChange и identity, виртуализацию 800 строк с доступностью последней, text layout/font generation, transient LOD с восстановлением полного кадра, shared downsampled image textures 512→2048, deferred root commit и live frame labels, invariance instances при main translation, nested Layers display updates, object operations/export, text tiling на 6400% и canvas-only pixel/hit-target alignment в старой и новооткрытой области. Community fixtures проверяют UI Prep embedded images + Inter + fit/reload и Globbb affine transforms с известными RGBA-пикселями; полные исходные файлы также открыты в WebGL/SVG и после reload.
+Текущий проверенный контур: **100 unit-тестов**, **60 browser-сценариев** и production TypeScript/Vite build. Дополнительно он включает DocumentChange и identity, виртуализацию 800 строк с доступностью последней, text layout/font generation, transient LOD с восстановлением полного кадра, shared downsampled image textures 512→2048, deferred root commit и live frame labels, invariance instances при main translation, nested Layers display updates, object operations/export, text tiling на 6400% и canvas-only pixel/hit-target alignment в старой и новооткрытой области. Community fixtures проверяют UI Prep embedded images + Inter + fit/reload и Globbb affine transforms с известными RGBA-пикселями; Transit Lines и BestProjects проверяют zero-size lines, stroke paints, page backgrounds, gradients, Worker import и reload; полные исходные файлы также открыты в WebGL/SVG.
 
 Количество тестов должно расти вместе с функциональностью. Обновляйте README, CHANGELOG, UX_AUDIT и эту историю только фактически проверенными сведениями.

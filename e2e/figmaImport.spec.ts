@@ -6,6 +6,8 @@ const smzFixturePath = fileURLToPath(new URL('./fixtures/TCB.PAY.SMZ.fig', impor
 const uiPrepButtonsFixturePath = fileURLToPath(new URL('./fixtures/UI Prep.Buttons.fig', import.meta.url));
 const uiPrepCoverFixturePath = fileURLToPath(new URL('./fixtures/UI Prep.Cover.fig', import.meta.url));
 const globbbFixturePath = fileURLToPath(new URL('./fixtures/Globbb.Pages.fig', import.meta.url));
+const transitLinesFixturePath = fileURLToPath(new URL('./fixtures/Transit.Lines.fig', import.meta.url));
+const bestProjectsFixturePath = fileURLToPath(new URL('./fixtures/BestProjects.Tracker.fig', import.meta.url));
 
 async function pngPixel(page: import('@playwright/test').Page, png: Buffer, x: number, y: number) {
   return page.evaluate(async ({ data, px, py }) => {
@@ -221,6 +223,44 @@ test('renders Globbb reflected illustrations with preserved vector geometry', as
   // Both points were background before their world transforms were corrected.
   expect(await pngPixel(page, canvas, 480, 430)).toEqual([230, 161, 200, 255]);
   expect(await pngPixel(page, canvas, 190, 440)).toEqual([178, 190, 131, 255]);
+  expect(errors).toEqual([]);
+});
+
+test('imports Transit lines, stroke paints and independent Figma page backgrounds', async ({ page }) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/?renderer=svg');
+  await page.locator('input[type="file"][accept*=".fig"]').setInputFiles(transitLinesFixturePath);
+  await expect(page.locator('.document-title')).toHaveValue('Transit.Lines', { timeout: 30_000 });
+  await expect(page.locator('.page-row')).toHaveCount(2);
+  await expect(page.locator('.canvas-viewport')).toHaveCSS('background-color', 'rgb(57, 72, 105)');
+  await expect(page.locator('.scene-node--vector')).toHaveCount(789);
+  expect(await page.locator('.scene-node--vector path[stroke-dasharray]').count()).toBeGreaterThan(0);
+  expect(await page.locator('.scene-node--vector path[stroke-linecap="butt"]').count()).toBeGreaterThan(0);
+  await page.locator('[data-page-id="fig-page-1"]').click();
+  await expect(page.locator('[data-page-id="fig-page-1"]')).toHaveClass(/is-active/);
+  await expect(page.locator('.canvas-viewport')).toHaveCSS('background-color', 'rgb(21, 61, 82)');
+  expect(errors).toEqual([]);
+});
+
+test('imports BestProjects gradient paints and preserves page background through WebGL', async ({ page }) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/?renderer=svg');
+  await page.locator('input[type="file"][accept*=".fig"]').setInputFiles(bestProjectsFixturePath);
+  await expect(page.locator('.document-title')).toHaveValue('BestProjects.Tracker', { timeout: 30_000 });
+  await expect(page.locator('.canvas-viewport')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect(page.locator('.scene-node--vector')).toHaveCount(2379);
+  expect(await page.locator('.scene-node--vector path[fill^="url(#gradient-"]').count()).toBeGreaterThan(0);
+  expect(await page.locator('.scene-node--vector path[stroke-linecap="round"]').count()).toBeGreaterThan(0);
+  await expect(page.locator('.save-indicator')).toContainText('Сохранено локально', { timeout: 30_000 });
+  await page.goto('/');
+  await expect(page.locator('.document-title')).toHaveValue('BestProjects.Tracker', { timeout: 30_000 });
+  await expect(page.locator('.pixi-scene')).toHaveAttribute('data-renderer', 'webgl', { timeout: 30_000 });
+  await expect(page.locator('.canvas-viewport')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expect.poll(() => page.locator('.pixi-scene').screenshot().then((png) => png.byteLength)).toBeGreaterThan(30_000);
   expect(errors).toEqual([]);
 });
 
