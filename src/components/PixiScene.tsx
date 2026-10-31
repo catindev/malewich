@@ -4,7 +4,8 @@ import type { DesignDocument, EditorNode, Point, TextNode, Viewport } from '../t
 import { fontFamilyWithFallback, getTextLines, invalidateTextLayoutCaches } from '../utils/text';
 import { measurePixiText } from '../utils/pixiTextCache';
 import { getActivePageId } from '../utils/pages';
-import { previewOverscan, textResolutionForZoom, vectorFillPaths } from '../utils/rendering';
+import { dashVectorPath, previewOverscan, shapeOutlinePath, textResolutionForZoom, vectorFillPaths, vectorScale } from '../utils/rendering';
+import { pixiGradient } from '../utils/paints';
 import { acquireImageTexture, imageBucketForSize, imageTextureCacheStats } from '../utils/imageTextures';
 import type { DocumentChange } from '../utils/documentChanges';
 
@@ -74,17 +75,23 @@ function shapePath(graphics: Graphics, node: EditorNode) {
   return graphics.rect(node.x, node.y, node.width, node.height);
 }
 
-function createShapeVisual(node: EditorNode): Container {
+function createShapeVisual(node: EditorNode): { visual: Container; gradient: ReturnType<typeof pixiGradient> | null } {
   const group = new Container();
   const fillPaint = 'fill' in node ? paint(node.fill) : paint('#ffffff');
   const strokePaint = paint(node.stroke);
-  const fill = shapePath(new Graphics(), node).fill(fillPaint);
+  const gradient = node.fillGradient ? pixiGradient(node.fillGradient) : null;
+  const fill = shapePath(new Graphics(), node).fill(gradient ?? fillPaint);
   group.addChild(fill);
   if (node.strokeWidth > 0 && strokePaint.alpha > 0) {
-    const stroke = shapePath(new Graphics(), node).stroke({
+    const style = {
       ...strokePaint,
       width: node.strokeWidth * (node.strokeAlign === 'inside' ? 2 : 1),
-    });
+      cap: node.strokeCap,
+      join: node.strokeJoin,
+    };
+    const stroke = node.strokeDash?.length
+      ? new Graphics().path(new GraphicsPath(dashVectorPath(shapeOutlinePath(node), node.strokeDash))).stroke(style)
+      : shapePath(new Graphics(), node).stroke(style);
     if (node.strokeAlign === 'inside') {
       const mask = shapePath(new Graphics(), node).fill(0xffffff);
       stroke.mask = mask;
@@ -92,7 +99,7 @@ function createShapeVisual(node: EditorNode): Container {
     }
     group.addChild(stroke);
   }
-  return group;
+  return { visual: group, gradient };
 }
 
 function createGreekText(node: TextNode, base: Text, measured: CanvasTextMetrics): Graphics {
@@ -216,23 +223,31 @@ function buildTextChunks(state: TextVisualState, desiredResolution: number, text
   state.chunkKey = key;
 }
 
-function createVectorVisual(node: Extract<EditorNode, { type: 'vector' }>): Container {
+function createVectorVisual(node: Extract<EditorNode, { type: 'vector' }>): { visual: Container; gradient: ReturnType<typeof pixiGradient> | null } {
   const graphics = new Graphics();
   const fillPaint = paint(node.fill);
   const strokePaint = paint(node.stroke);
-  if (fillPaint.alpha > 0) {
+  const gradient = node.fillGradient ? pixiGradient(node.fillGradient) : null;
+  if (gradient || fillPaint.alpha > 0) {
     // Pixi's SVG parser drops holes in nonzero paths. Build outer+hole groups
     // explicitly from the editable path instead of rasterizing the vector.
     for (const data of vectorFillPaths(node.path, node.fillRule)) {
-      graphics.path(new GraphicsPath(data, true)).fill(fillPaint);
+      graphics.path(new GraphicsPath(data, true)).fill(gradient ?? fillPaint);
     }
   }
   if (strokePaint.alpha > 0 && node.strokeWidth > 0) {
-    graphics.path(new GraphicsPath(node.path)).stroke({ ...strokePaint, width: node.strokeWidth });
+    const path = node.strokeDash?.length ? dashVectorPath(node.path, node.strokeDash) : node.path;
+    graphics.path(new GraphicsPath(path)).stroke({
+      ...strokePaint,
+      width: node.strokeWidth,
+      cap: node.strokeCap,
+      join: node.strokeJoin,
+    });
   }
   graphics.position.set(node.x, node.y);
-  graphics.scale.set(node.width / node.pathWidth, node.height / node.pathHeight);
-  return graphics;
+  const scale = vectorScale(node);
+  graphics.scale.set(scale.x, scale.y);
+  return { visual: graphics, gradient };
 }
 
 function bindImageTexture(
@@ -293,7 +308,9 @@ function needsMask(node: EditorNode): boolean {
 
 function createMask(node: EditorNode): Graphics {
   const graphics = new Graphics();
-  if ('cornerRadius' in node) roundedRect(graphics, node).fill(0xffffff);
+  if (node.type === 'image' && node.clipShape === 'ellipse') {
+    graphics.ellipse(node.x + node.width / 2, node.y + node.height / 2, node.width / 2, node.height / 2).fill(0xffffff);
+  } else if ('cornerRadius' in node) roundedRect(graphics, node).fill(0xffffff);
   else graphics.rect(node.x, node.y, node.width, node.height).fill(0xffffff);
   return graphics;
 }
@@ -368,9 +385,12 @@ function updateView(
     const { visual, state } = createTextVisual(node);
     view.visual = visual;
     view.text = state;
-  } else if (node.type === 'vector') view.visual = createVectorVisual(node);
-  else if (node.type === 'image') view.visual = createImageVisual(node, view, viewport?.zoom ?? 1);
-  else view.visual = createShapeVisual(node);
+  } else if (node.type === 'image') view.visual = createImageVisual(node, view, viewport?.zoom ?? 1);
+  else {
+    const { visual, gradient } = node.type === 'vector' ? createVectorVisual(node) : createShapeVisual(node);
+    view.visual = visual;
+    if (gradient) view.cleanup = () => gradient.destroy();
+  }
   container.addChildAt(view.visual, 0);
 
   if (needsMask(node)) {

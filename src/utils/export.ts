@@ -9,6 +9,8 @@ import {
 } from './document';
 import { matrixToString, mergeBounds, nodeMatrix, round } from './geometry';
 import { fontFamilyWithFallback, getTextLines } from './text';
+import { fillReference, svgGradientDefinition } from './paints';
+import { vectorScale } from './rendering';
 
 function escapeXml(value: string): string {
   return value.replace(/[<>&"']/g, (character) => ({
@@ -19,11 +21,14 @@ function escapeXml(value: string): string {
 function renderNode(doc: DesignDocument, node: EditorNode, root = false): string {
   if (!node.visible) return '';
   const transform = matrixToString(root ? getWorldMatrix(doc, node) : nodeMatrix(node));
-  const fill = 'fill' in node ? node.fill : '#ffffff';
-  const common = `fill="${escapeXml(fill)}" stroke="${escapeXml(node.stroke)}" stroke-width="${node.strokeWidth * (node.strokeAlign === 'inside' ? 2 : 1)}"`;
+  const fill = fillReference(node, 'export-');
+  const dash = node.strokeDash?.length ? ` stroke-dasharray="${node.strokeDash.join(' ')}"` : '';
+  const cap = node.strokeCap ? ` stroke-linecap="${node.strokeCap}"` : '';
+  const join = node.strokeJoin ? ` stroke-linejoin="${node.strokeJoin}"` : '';
+  const common = `fill="${escapeXml(fill)}" stroke="${escapeXml(node.stroke)}" stroke-width="${node.strokeWidth * (node.strokeAlign === 'inside' ? 2 : 1)}"${dash}${cap}${join}`;
   const insideStroke = node.strokeAlign === 'inside' ? ` clip-path="url(#export-stroke-clip-${node.id})"` : '';
   const children = doc.nodes.filter((candidate) => candidate.parentId === node.id);
-  let content = '';
+  let content = svgGradientDefinition(node, 'export-');
 
   if (node.type === 'frame') {
     content += `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${node.cornerRadius}" ${common}${insideStroke}/>`;
@@ -35,7 +40,8 @@ function renderNode(doc: DesignDocument, node: EditorNode, root = false): string
     content += `<ellipse cx="${node.x + node.width / 2}" cy="${node.y + node.height / 2}" rx="${node.width / 2}" ry="${node.height / 2}" ${common}${insideStroke}/>`;
     if (insideStroke) content += `<defs><clipPath id="export-stroke-clip-${node.id}"><ellipse cx="${node.x + node.width / 2}" cy="${node.y + node.height / 2}" rx="${node.width / 2}" ry="${node.height / 2}"/></clipPath></defs>`;
   } else if (node.type === 'vector') {
-    content += `<g transform="translate(${node.x} ${node.y}) scale(${node.width / node.pathWidth} ${node.height / node.pathHeight})"><path d="${escapeXml(node.path)}" fill="${escapeXml(node.fill)}" fill-rule="${node.fillRule ?? 'nonzero'}" stroke="${escapeXml(node.stroke)}" stroke-width="${node.strokeWidth}"/></g>`;
+    const scale = vectorScale(node);
+    content += `<g transform="translate(${node.x} ${node.y}) scale(${scale.x} ${scale.y})"><path d="${escapeXml(node.path)}" fill="${escapeXml(fillReference(node, 'export-'))}" fill-rule="${node.fillRule ?? 'nonzero'}" stroke="${escapeXml(node.stroke)}" stroke-width="${node.strokeWidth}"${dash}${cap}${join}/></g>`;
   } else if (node.type === 'text') {
     const x = node.textAlign === 'center' ? node.x + node.width / 2 : node.textAlign === 'right' ? node.x + node.width : node.x;
     const anchor = node.textAlign === 'center' ? 'middle' : node.textAlign === 'right' ? 'end' : 'start';
@@ -46,9 +52,12 @@ function renderNode(doc: DesignDocument, node: EditorNode, root = false): string
     if (node.autoSize === 'none') {
       content += `<defs><clipPath id="${clipId}"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}"/></clipPath></defs>`;
     }
-    content += `<g${node.autoSize === 'none' ? ` clip-path="url(#${clipId})"` : ''}><text fill="${escapeXml(node.fill)}" font-size="${node.fontSize}" font-family="${escapeXml(fontFamilyWithFallback(node.fontFamily))}" font-weight="${node.fontWeight}" letter-spacing="${node.letterSpacing}" text-anchor="${anchor}">${lines}</text></g>`;
+    content += `<g${node.autoSize === 'none' ? ` clip-path="url(#${clipId})"` : ''}><text fill="${escapeXml(fillReference(node, 'export-'))}" font-size="${node.fontSize}" font-family="${escapeXml(fontFamilyWithFallback(node.fontFamily))}" font-weight="${node.fontWeight}" letter-spacing="${node.letterSpacing}" text-anchor="${anchor}">${lines}</text></g>`;
   } else if (node.type === 'image') {
-    content += `<defs><clipPath id="export-clip-${node.id}"><rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${node.cornerRadius}"/></clipPath></defs>`;
+    const clip = node.clipShape === 'ellipse'
+      ? `<ellipse cx="${node.x + node.width / 2}" cy="${node.y + node.height / 2}" rx="${node.width / 2}" ry="${node.height / 2}"/>`
+      : `<rect x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" rx="${node.cornerRadius}"/>`;
+    content += `<defs><clipPath id="export-clip-${node.id}">${clip}</clipPath></defs>`;
     if (node.src) content += `<image href="${escapeXml(node.src)}" x="${node.x}" y="${node.y}" width="${node.width}" height="${node.height}" preserveAspectRatio="${node.objectFit === 'fill' ? 'none' : 'xMidYMid slice'}" clip-path="url(#export-clip-${node.id})"/>`;
   }
 

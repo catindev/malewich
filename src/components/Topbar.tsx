@@ -19,6 +19,7 @@ import { useEditorStore } from '../store/editorStore';
 import { exportJson } from '../utils/export';
 import { getNode, getNodeBounds } from '../utils/document';
 import { isDesignDocument } from '../utils/storage';
+import { importFigmaFile } from '../utils/figmaImportAsync';
 import { PrototypePlayer } from './PrototypePlayer';
 import { usePageDocument } from '../hooks/usePageDocument';
 import { BrandMark } from './BrandMark';
@@ -28,6 +29,16 @@ interface ProjectControlsProps {
   onTogglePanels: () => void;
 }
 
+interface ImportProgress {
+  name: string;
+  size: number;
+}
+
+const LARGE_FIG_SIZE = 8 * 1024 * 1024;
+const fileSize = (size: number) => size >= 1024 * 1024
+  ? `${(size / (1024 * 1024)).toFixed(1)} МБ`
+  : `${Math.max(1, Math.ceil(size / 1024))} КБ`;
+
 export function ProjectControls({ panelsVisible, onTogglePanels }: ProjectControlsProps) {
   const doc = usePageDocument();
   const saveState = useEditorStore((state) => state.saveState);
@@ -36,18 +47,19 @@ export function ProjectControls({ panelsVisible, onTogglePanels }: ProjectContro
   const loadDocument = useEditorStore((state) => state.loadDocument);
   const [menuOpen, setMenuOpen] = useState(false);
   const [title, setTitle] = useState(doc.name);
-  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
+  const importing = importProgress !== null;
   const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => setTitle(doc.name), [doc.name]);
 
   const importDocument = async (file: File | undefined) => {
-    if (!file) return;
-    setImporting(true);
+    if (!file || importing) return;
+    setImportProgress({ name: file.name, size: file.size });
+    setMenuOpen(false);
     try {
       if (file.name.toLowerCase().endsWith('.fig')) {
-        const { importFigmaDocument } = await import('../utils/figmaImport');
-        loadDocument(importFigmaDocument(await file.arrayBuffer(), file.name));
+        loadDocument(await importFigmaFile(file));
       } else {
         const parsed: unknown = JSON.parse(await file.text());
         if (!isDesignDocument(parsed)) throw new Error('Это не проект «Малевич» версии 1.');
@@ -57,7 +69,7 @@ export function ProjectControls({ panelsVisible, onTogglePanels }: ProjectContro
     } catch (error) {
       window.alert(error instanceof Error ? error.message : 'Не удалось открыть файл');
     } finally {
-      setImporting(false);
+      setImportProgress(null);
     }
   };
 
@@ -110,12 +122,26 @@ export function ProjectControls({ panelsVisible, onTogglePanels }: ProjectContro
       </div>
       {menuOpen && <button className="popover-dismiss" onClick={() => setMenuOpen(false)} aria-label="Закрыть меню" />}
       <input
-        ref={importRef} type="file" accept=".fig,.json,.malewich.json" hidden
+        ref={importRef} type="file" accept=".fig,.json,.malewich.json" hidden disabled={importing}
         onChange={(event) => {
           void importDocument(event.target.files?.[0]);
           event.target.value = '';
         }}
       />
+      {importProgress && (
+        <div className="import-progress-backdrop">
+          <div className="import-progress" role="status" aria-live="polite" aria-label={`Импорт ${importProgress.name}`}>
+            <LoaderCircle size={28} className="spin" />
+            <div className="import-progress-copy">
+              <strong>{importProgress.size >= LARGE_FIG_SIZE ? 'Файл большой. Нужно время на загрузку' : 'Открываем документ'}</strong>
+              <p>{importProgress.size >= LARGE_FIG_SIZE
+                ? 'Декодирование выполняется в фоне. Не закрывайте вкладку.'
+                : 'Подготавливаем редактируемые слои.'}</p>
+              <span title={importProgress.name}>{importProgress.name} · {fileSize(importProgress.size)}</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

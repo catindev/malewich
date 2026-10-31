@@ -5,6 +5,7 @@ import type {
   AutoLayoutSettings,
   DesignDocument,
   EditorNode,
+  GradientFillDefinition,
   VariableCollection,
   VariableDefinition,
   VectorNode,
@@ -39,6 +40,37 @@ function visiblePaint(node: FigmaSceneNode, kind: 'fills' | 'strokes') {
 
 function visibleImagePaint(node: FigmaSceneNode) {
   return node.fills.find((paint) => paint.visible && paint.type === 'IMAGE' && paint.imageHash);
+}
+
+function visibleGradientPaint(node: FigmaSceneNode) {
+  return node.fills.find((paint) => paint.visible &&
+    (paint.type === 'GRADIENT_LINEAR' || paint.type === 'GRADIENT_RADIAL') &&
+    paint.gradientStops?.length && paint.gradientTransform);
+}
+
+function mapGradient(paint: NonNullable<ReturnType<typeof visibleGradientPaint>>): GradientFillDefinition {
+  return {
+    type: paint.type === 'GRADIENT_LINEAR' ? 'linear' : 'radial',
+    stops: paint.gradientStops!.map((stop) => ({
+      color: figColorToCss(stop.color, paint.opacity),
+      position: stop.position,
+    })),
+    transform: { ...paint.gradientTransform! },
+  };
+}
+
+function pageBackground(page: FigmaSceneNode): string | undefined {
+  const fields = page.source.fig.rawNodeFields;
+  const paints = Array.isArray(fields.backgroundPaints) ? fields.backgroundPaints : [];
+  const paint = paints.find((candidate) => {
+    if (!candidate || typeof candidate !== 'object') return false;
+    const value = candidate as Record<string, unknown>;
+    return value.visible !== false && value.type === 'SOLID' && isColor(value.color);
+  }) as Record<string, unknown> | undefined;
+  if (paint && isColor(paint.color)) {
+    return figColorToCss(paint.color, typeof paint.opacity === 'number' ? paint.opacity : 1);
+  }
+  return isColor(fields.backgroundColor) ? figColorToCss(fields.backgroundColor) : undefined;
 }
 
 /** Convert embedded FIG image bytes without depending on object URLs or network access. */
@@ -227,13 +259,24 @@ function equivalent(left: unknown, right: unknown): boolean {
 
 const overrideFields = [
   'name', 'width', 'height', 'rotation', 'flipX', 'flipY', 'opacity', 'visible', 'locked', 'fill', 'stroke', 'strokeWidth',
-  'strokeAlign', 'cornerRadius', 'clip', 'autoLayout', 'layout', 'text', 'fontSize', 'fontFamily',
+  'strokeAlign', 'strokeDash', 'strokeCap', 'strokeJoin', 'fillGradient', 'cornerRadius', 'clip', 'autoLayout', 'layout', 'text', 'fontSize', 'fontFamily',
   'fontWeight', 'lineHeight', 'letterSpacing', 'textAlign', 'autoSize', 'path', 'pathWidth', 'pathHeight',
-  'fillRule', 'src', 'objectFit', 'variableBindings',
+  'fillRule', 'src', 'objectFit', 'clipShape', 'variableBindings',
 ] as const;
 
 export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет Figma'): DesignDocument {
-  const { graph } = materializeFigArchive(buffer);
+  const diagnostics = { properties: 0, assignments: 0, components: 0, slots: 0 };
+  const { graph } = materializeFigArchive(buffer, {
+    // A stale override must not discard every valid page in a large Figma library.
+    onUnresolvedProperty: () => { diagnostics.properties += 1; },
+    onUnresolvedAssignment: () => { diagnostics.assignments += 1; },
+    onMissingComponent: () => { diagnostics.components += 1; },
+    onMissingSlotContent: () => { diagnostics.slots += 1; },
+  });
+  const skipped = Object.values(diagnostics).reduce((sum, count) => sum + count, 0);
+  if (skipped > 0) {
+    console.warn(`[Figma import] Пропущено устаревших component overrides: ${skipped}`, diagnostics);
+  }
   const pages = graph.getPages().filter((page) => !page.internalOnly);
   if (pages.length === 0) throw new Error('В Figma-файле нет доступных страниц.');
 
@@ -292,6 +335,7 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
     const y = node.y + offsetY;
     const fill = visiblePaint(node, 'fills');
     const stroke = visiblePaint(node, 'strokes');
+    const gradient = visibleGradientPaint(node);
     const imageFill = visibleImagePaint(node);
     const imageBytes = imageFill?.imageHash ? graph.images.get(imageFill.imageHash) : undefined;
     const imageScaleMode = String(imageFill?.imageScaleMode ?? '');
@@ -318,6 +362,9 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
       minHeight: node.minHeight ?? undefined,
       maxHeight: node.maxHeight ?? undefined,
     } : undefined;
+    const dashPattern = (stroke?.dashPattern ?? node.dashPattern).filter((value) => Number.isFinite(value) && value > 0);
+    const strokeCap = stroke?.cap ?? node.strokeCap;
+    const strokeJoin = stroke?.join ?? node.strokeJoin;
     const base = {
       id: nodeId(node.id),
       name: node.name || node.text || node.type,
@@ -336,16 +383,21 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
       isMask: node.isMask || undefined,
       parentId,
       pageId: parentId === null ? pageId : undefined,
-      fill: fill ? figColorToCss(fill.color, fill.opacity) : 'transparent',
+      fill: fill ? figColorToCss(fill.color, fill.opacity) : gradient?.gradientStops?.[0]
+        ? figColorToCss(gradient.gradientStops[0].color, gradient.opacity) : 'transparent',
       stroke: stroke ? figColorToCss(stroke.color, stroke.opacity) : 'transparent',
       strokeWidth: stroke?.weight ?? 0,
       strokeAlign: stroke?.align === 'INSIDE' ? 'inside' as const : stroke?.align === 'OUTSIDE' ? 'outside' as const : 'center' as const,
+      strokeDash: dashPattern.length > 0 ? dashPattern : undefined,
+      strokeCap: stroke ? strokeCap === 'ROUND' ? 'round' as const : strokeCap === 'SQUARE' ? 'square' as const : 'butt' as const : undefined,
+      strokeJoin: stroke ? strokeJoin === 'ROUND' ? 'round' as const : strokeJoin === 'BEVEL' ? 'bevel' as const : 'miter' as const : undefined,
+      fillGradient: gradient ? mapGradient(gradient) : undefined,
       layout,
       variableBindings: mapVariableBindings(node, supportedVariables),
     };
 
     let imported: EditorNode;
-    const imageShape = node.type === 'FRAME' || node.type === 'RECTANGLE' || node.type === 'ROUNDED_RECTANGLE';
+    const imageShape = node.type === 'FRAME' || node.type === 'RECTANGLE' || node.type === 'ROUNDED_RECTANGLE' || node.type === 'ELLIPSE';
     if (imageFill && imageBytes && imageShape && graph.getChildren(node.id).length === 0 &&
       (imageScaleMode === 'FILL' || imageScaleMode === 'STRETCH')) {
       imported = {
@@ -353,6 +405,7 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
         type: 'image',
         src: figImageToDataUrl(imageBytes),
         cornerRadius: node.independentCorners ? node.topLeftRadius : node.cornerRadius,
+        clipShape: node.type === 'ELLIPSE' ? 'ellipse' as const : undefined,
         objectFit: imageScaleMode === 'FILL' ? 'cover' : 'fill',
         opacity: node.opacity * imageFill.opacity,
       };
@@ -475,7 +528,11 @@ export function importFigmaDocument(buffer: ArrayBuffer, fileName = 'Макет 
     createdAt: now,
     updatedAt: now,
     nodes,
-    pages: pages.map((page, index) => ({ id: `fig-page-${index}`, name: page.name || `Страница ${index + 1}` })),
+    pages: pages.map((page, index) => ({
+      id: `fig-page-${index}`,
+      name: page.name || `Страница ${index + 1}`,
+      background: pageBackground(page),
+    })),
     activePageId: 'fig-page-0',
     variables: variableDefinitions,
     variableCollections,

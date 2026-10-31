@@ -2,6 +2,26 @@ export type NodeType = 'frame' | 'rectangle' | 'ellipse' | 'text' | 'image' | 'v
 export type Tool = 'select' | 'hand' | NodeType;
 export type TextAlign = 'left' | 'center' | 'right';
 
+export interface GradientStopDefinition {
+  color: string;
+  position: number;
+}
+
+export interface GradientTransform {
+  m00: number;
+  m01: number;
+  m02: number;
+  m10: number;
+  m11: number;
+  m12: number;
+}
+
+export interface GradientFillDefinition {
+  type: 'linear' | 'radial';
+  stops: GradientStopDefinition[];
+  transform: GradientTransform;
+}
+
 interface BaseNode {
   id: string;
   type: NodeType;
@@ -24,6 +44,11 @@ interface BaseNode {
   stroke: string;
   strokeWidth: number;
   strokeAlign?: 'inside' | 'center' | 'outside';
+  strokeDash?: number[];
+  strokeCap?: 'butt' | 'round' | 'square';
+  strokeJoin?: 'miter' | 'round' | 'bevel';
+  /** Figma gradient paint in the node's unit-square coordinate space. Fill remains a solid fallback. */
+  fillGradient?: GradientFillDefinition;
   component?: {
     rootId: string;
     sourceId: string;
@@ -102,6 +127,8 @@ export interface ImageNode extends BaseNode {
   cornerRadius: number;
   /** Figma IMAGE FILL maps to cover; STRETCH maps to fill. Default preserves existing cover behavior. */
   objectFit?: 'cover' | 'fill';
+  /** Embedded images can retain an elliptical source outline instead of a rounded rectangle. */
+  clipShape?: 'ellipse';
 }
 
 export interface VectorNode extends BaseNode {
