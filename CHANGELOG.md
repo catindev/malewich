@@ -17,6 +17,7 @@
 - Диапазон масштаба холста расширен до 5–25 600%; добавлены zoom-пресеты до 25 600% и соответствующий предел для fit-to-selection.
 - Секция экспорта выделения в Inspector с PNG/SVG, масштабом 1–3×, предпросмотром и именем файла по имени слоя.
 - Расширенное объектное меню: paste to replace, SVG/CSS copy, Prototype links, перенос между страницами, порядок, группы/фреймы, rename, flatten/outline для фигур, Auto Layout, components, visibility/lock и flip.
+- Регрессионные fixtures `Transit.Lines.fig` и `BestProjects.Tracker.fig` для Figma lines, page backgrounds, stroke paints и gradient paints.
 
 ### Изменено
 
@@ -37,6 +38,8 @@
 - Панели и Inspector не открывают системное контекстное меню; для выделенного слоя доступно собственное меню команд.
 - SMZ bell и другие векторы без derived geometry импортируются из `vectorNetwork` как настоящие curves, а не как чёрные прямоугольники.
 - Figma mask-контуры логотипов ТКБ больше не рисуются как обычная чёрная подложка ни на canvas, ни в Presentation/export. Ранее сохранённые документы нужно один раз обновить повторным импортом исходного `.fig`: старый JSON не содержит утраченные curves и mask flags.
+- Нулевые Figma LINE сохраняют видимый stroke, а dash pattern, cap/join, linear/radial gradients и page background проходят через импорт, SVG/WebGL и export в проверенном контуре.
+- Большие `.fig` декодируются в Worker с transfer ArrayBuffer, поэтому импорт не блокирует основной поток редактора.
 - Текст на canvas больше не размывается при увеличении: убран предел 8×, а длинные строки делятся на retained-фрагменты с учётом GPU texture limit. На 6400% видимые фрагменты получают разрешение по zoom/DPR вместо растягивания старого растра.
 - Подпись корневого фрейма двигается вместе с artwork и selection во время deferred drag, а не догоняет объект после отпускания.
 - Внутренние отверстия `nonzero`-векторов корректно вырезаются в WebGL независимо от порядка контуров; буква «б» в логотипе ТКБ больше не заливается. Исправление применяется к уже сохранённым редактируемым path без повторного импорта.
@@ -58,10 +61,11 @@
 - Wheel/pinch zoom использует немедленный compositor preview вместо полного WebGL render на каждое событие. Финальный кадр выполняется после 90 мс паузы, а разрешение пересчитывается только у видимого текста; в SMZ-профиле шаги жеста заняли около 60–66 мс.
 - Асинхронные image/editing/resize invalidations коалесцируются в один rAF; font signature не пересчитывается при zoom-only renders, а проекция страницы переиспользуется компонентами через WeakMap.
 - History больше не сравнивает документы двойным `JSON.stringify`: сериализуемые значения сравниваются с ранним выходом по ссылкам и `updatedAt`; no-op commit без изменений возвращается до derived pipeline. На SMZ устранено около 19–22 мс сериализации на snapshot в диагностическом профиле.
+- Для каждого renderer/import изменения сохраняется performance-regression контур: полный browser suite повторно проверяет compositor pan/frame drag/zoom, retained scenes, text tiling, image buckets и импорт/reload; измерения native/software WebGL не трактуются как универсальный benchmark.
 
 ### Проверка
 
-- 96 unit-тестов и 58 browser-сценариев; production TypeScript/Vite build.
+- 100 unit-тестов и 60 browser-сценариев; production TypeScript/Vite build.
 - Полные `UI Prep Buttons (Community).fig` и `Globbb - Design System.fig` проверены в WebGL/SVG и после reload; community fixtures дополнительно проверяют embedded images, font fallback и известные RGBA-пиксели отражённых иллюстраций.
 - Реальный SMZ проверен на DPR 2: резкий текст на 6400%, live frame labels и canvas-only 2480×1280 без обрезания новой области.
 

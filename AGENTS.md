@@ -95,7 +95,7 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 
 ## Тесты и регрессии
 
-Базовый снимок содержит 67 unit-тестов и 44 browser-сценария; текущий контур после DocumentChange, виртуализации Layers, text layout cache, transient LOD, image buckets, SMZ, vector/mask, page/UI, extreme zoom/nonzero rendering, text tiling, object operations/export, deferred root labels, component/layer optimizations, branding, canvas-only exposed-pixel и community import regressions — 96 и 58 соответственно. При добавлении тестов обновляйте документацию с фактическими числами.
+Базовый снимок содержит 67 unit-тестов и 44 browser-сценария; текущий контур после DocumentChange, виртуализации Layers, text layout cache, transient LOD, image buckets, SMZ, vector/mask, page/UI, extreme zoom/nonzero rendering, text tiling, object operations/export, deferred root labels, component/layer optimizations, branding, canvas-only exposed-pixel, community import и lines/gradient/page-background regressions — 100 и 60 соответственно. При добавлении тестов обновляйте документацию с фактическими числами.
 
 Обязательные специальные проверки:
 
@@ -111,6 +111,8 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 - CSS token reconstruction (`tokens.join('') === source`).
 
 Добавляйте тест на исправленное поведение. Не ослабляйте старые assertions ради прохождения; сначала выясните, является ли новое поведение намеренным.
+
+Для изменений renderer, import, pages, storage и больших fixtures добавляйте performance-regression шаг: повторяйте релевантный compositor pan/frame drag/zoom/import сценарий и сравнивайте с последним baseline. Не используйте `data-render-ms` или software-WebGL время как универсальный benchmark; отдельно фиксируйте JS/React latency, native rasterization и persistence.
 
 ## Документация и Git
 
