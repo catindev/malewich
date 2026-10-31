@@ -52,6 +52,17 @@ export function createNode(
       return { ...base, type, name: 'Прямоугольник', fill: '#8b5cf6', cornerRadius: 0 };
     case 'ellipse':
       return { ...base, type, name: 'Эллипс', fill: '#8b5cf6' };
+    case 'line':
+      return { ...base, type, name: 'Линия', height: 0, stroke: '#202020', strokeWidth: 2 };
+    case 'arrow':
+      return {
+        ...base, type, name: 'Стрелка', height: 0, stroke: '#202020', strokeWidth: 2,
+        startArrowhead: false, endArrowhead: true,
+      };
+    case 'polygon':
+      return { ...base, type, name: 'Многоугольник', fill: '#8b5cf6', sides: 3 };
+    case 'star':
+      return { ...base, type, name: 'Звезда', fill: '#8b5cf6', points: 5, innerRadius: 0.382 };
     case 'text':
       return {
         ...base,
@@ -243,6 +254,10 @@ export function uniqueNodeName(doc: DesignDocument, type: NodeType): string {
     frame: 'Фрейм',
     rectangle: 'Прямоугольник',
     ellipse: 'Эллипс',
+    line: 'Линия',
+    arrow: 'Стрелка',
+    polygon: 'Многоугольник',
+    star: 'Звезда',
     text: 'Текст',
     image: 'Изображение',
     vector: 'Вектор',

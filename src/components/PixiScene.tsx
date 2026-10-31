@@ -8,6 +8,7 @@ import { dashVectorPath, previewOverscan, shapeOutlinePath, textResolutionForZoo
 import { pixiGradient } from '../utils/paints';
 import { acquireImageTexture, imageBucketForSize, imageTextureCacheStats } from '../utils/imageTextures';
 import type { DocumentChange } from '../utils/documentChanges';
+import { linearPath, parametricShapePath } from '../utils/shapes';
 
 interface PixiSceneProps {
   doc: DesignDocument;
@@ -71,12 +72,29 @@ function roundedRect(graphics: Graphics, node: Extract<EditorNode, { cornerRadiu
 
 function shapePath(graphics: Graphics, node: EditorNode) {
   if (node.type === 'ellipse') return graphics.ellipse(node.x + node.width / 2, node.y + node.height / 2, node.width / 2, node.height / 2);
+  if (node.type === 'polygon' || node.type === 'star') return graphics.path(new GraphicsPath(parametricShapePath(node)));
   if ('cornerRadius' in node) return roundedRect(graphics, node);
   return graphics.rect(node.x, node.y, node.width, node.height);
 }
 
 function createShapeVisual(node: EditorNode): { visual: Container; gradient: ReturnType<typeof pixiGradient> | null } {
   const group = new Container();
+  if (node.type === 'line' || node.type === 'arrow') {
+    const strokePaint = paint(node.stroke);
+    if (node.strokeWidth <= 0 || strokePaint.alpha <= 0) return { visual: group, gradient: null };
+    const style = {
+      ...strokePaint,
+      width: node.strokeWidth,
+      cap: node.strokeCap,
+      join: node.strokeJoin,
+    };
+    const path = linearPath(node);
+    const stroke = new Graphics().path(new GraphicsPath(
+      node.strokeDash?.length ? dashVectorPath(path, node.strokeDash) : path,
+    )).stroke(style);
+    group.addChild(stroke);
+    return { visual: group, gradient: null };
+  }
   const fillPaint = 'fill' in node ? paint(node.fill) : paint('#ffffff');
   const strokePaint = paint(node.stroke);
   const gradient = node.fillGradient ? pixiGradient(node.fillGradient) : null;
@@ -323,6 +341,27 @@ function createView(node: EditorNode, invalidate: () => void, viewport: Viewport
   return view;
 }
 
+/** Destroy one retained view without destroying child node containers that may survive a reparent/undo. */
+function destroyView(view: NodeView): void {
+  view.cleanup?.();
+  view.cleanup = null;
+  if (view.visual) {
+    view.container.removeChild(view.visual);
+    view.visual.destroy({ children: true });
+    view.visual = null;
+  }
+  if (view.mask) {
+    view.container.mask = null;
+    view.container.removeChild(view.mask);
+    view.mask.destroy();
+    view.mask = null;
+  }
+  // Child node containers are owned by their own NodeViews. Detach them before
+  // destroying the parent so a structural undo can attach them to a live parent.
+  view.container.removeChildren();
+  view.container.destroy({ children: false });
+}
+
 function isPureTranslation(previous: EditorNode, next: EditorNode): boolean {
   if (previous.type !== next.type) return false;
   for (const key in previous) {
@@ -347,8 +386,9 @@ function updateView(
     const dx = node.x - view.source.x;
     const dy = node.y - view.source.y;
     view.source = node;
-    const centerX = node.x + node.width / 2;
-    const centerY = node.y + node.height / 2;
+    const linear = node.type === 'line' || node.type === 'arrow';
+    const centerX = linear ? node.x : node.x + node.width / 2;
+    const centerY = linear ? node.y : node.y + node.height / 2;
     view.container.position.set(centerX, centerY);
     view.container.pivot.set(centerX, centerY);
     // Every node stores absolute page geometry. Move its retained visuals too,
@@ -372,8 +412,9 @@ function updateView(
   view.source = node;
   view.text = null;
   const { container } = view;
-  const centerX = node.x + node.width / 2;
-  const centerY = node.y + node.height / 2;
+  const linear = node.type === 'line' || node.type === 'arrow';
+  const centerX = linear ? node.x : node.x + node.width / 2;
+  const centerY = linear ? node.y : node.y + node.height / 2;
   container.position.set(centerX, centerY);
   container.pivot.set(centerX, centerY);
   container.rotation = node.rotation * Math.PI / 180;
@@ -712,8 +753,7 @@ export function PixiScene({ doc, change, viewport, editingId, panning, movingIds
       }
       for (const [id, view] of views) {
         if (!nextIds.has(id)) {
-          view.cleanup?.();
-          view.container.destroy({ children: true });
+          destroyView(view);
           views.delete(id);
         }
       }
@@ -721,8 +761,7 @@ export function PixiScene({ doc, change, viewport, editingId, panning, movingIds
       for (const id of change.deletedIds) {
         const view = views.get(id);
         if (!view) continue;
-        view.cleanup?.();
-        view.container.destroy({ children: true });
+        destroyView(view);
         views.delete(id);
       }
     }

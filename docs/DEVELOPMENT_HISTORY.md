@@ -267,7 +267,21 @@ Text measurement и wrapping кэшируются в design-space, измере�
 
 Для последующих изменений renderer/import/pages обязательна performance-regression проверка: повторяется последний релевантный compositor/import сценарий, сравниваются JS/React latency, native rasterization и persistence, а не только `data-render-ms`. Software-WebGL измерения используются как диагностический baseline конкретного окружения, не как общий benchmark.
 
-## 12. Регрессионный ориентир
+## 12. Надёжность документа, retained views и параметрические фигуры
+
+QA выявил три разных класса ошибок, которые нельзя исправлять локальным визуальным патчем.
+
+Во-первых, резервная копия проекта обязана читать полный `state.doc`. Active-page projection подходит canvas и Inspector, но экспорт проекта через неё молча теряет остальные страницы. Это тот же документный инвариант, что у persistence и history.
+
+Во-вторых, Pixi parent container не владеет retained views своих потомков. При Group → Undo потомки могут получить нового родителя, поэтому удаление старого view сначала отсоединяет child containers и уничтожает только собственные visual/mask/resources. Рекурсивный `destroy({ children: true })` на таком родителе разрушал объекты, которые история собиралась использовать повторно.
+
+В-третьих, authoring primitives используют собственные сериализуемые параметры, а не прямоугольные имитации или предрасчитанные paths. Line/Arrow хранят start в `x/y`, длину в `width`, направление в `rotation` и настоящую нулевую `height`; endpoints получаются производно. Их rotation/flip pivot находится в первой endpoint, а не в центре bounding box: иначе изменение угла сдвигает начало отрезка и делает endpoint editing недостоверным. Тот же pivot обязан совпадать в SVG matrix, retained Pixi container, hit-test и Inspector. Arrow добавляет независимые `startArrowhead`/`endArrowhead`; Polygon хранит `sides`, Star — `points` и `innerRadius`. Общий `shapes.ts` строит paths для WebGL, SVG fallback и export, поэтому resize и точные поля меняют исходные параметры, а не теряют их растеризацией. Export bounds дополнительно включают stroke и arrowheads.
+
+Selection для linear nodes показывает две endpoint handles вместо восьми resize handles. Endpoint drag держит противоположный конец неподвижным, `Shift` ограничивает угол 45°, release создаёт один history entry, а `Escape` возвращает `startDoc` без чернового узла. Shape menu сохраняет последнюю выбранную фигуру или изображение как главную иконку независимо от последующего возврата к Select.
+
+Отдельное исправление Layers связано с виртуализацией: автоматический scroll into view нужен для нового selection и после автоматического раскрытия его предков, но не после каждого ручного expand/collapse. Иначе дерево отменяет ручную прокрутку и виртуально размонтирует целевую строку до клика.
+
+## 13. Регрессионный ориентир
 
 На момент initial public snapshot:
 
@@ -278,6 +292,6 @@ Text measurement и wrapping кэшируются в design-space, измере�
 - nested move pixel equality;
 - страницы, группы, Presentation, themes, selection scroll и CSS highlighting.
 
-Текущий проверенный контур: **100 unit-тестов**, **60 browser-сценариев** и production TypeScript/Vite build. Дополнительно он включает DocumentChange и identity, виртуализацию 800 строк с доступностью последней, text layout/font generation, transient LOD с восстановлением полного кадра, shared downsampled image textures 512→2048, deferred root commit и live frame labels, invariance instances при main translation, nested Layers display updates, object operations/export, text tiling на 6400% и canvas-only pixel/hit-target alignment в старой и новооткрытой области. Community fixtures проверяют UI Prep embedded images + Inter + fit/reload и Globbb affine transforms с известными RGBA-пикселями; Transit Lines и BestProjects проверяют zero-size lines, stroke paints, page backgrounds, gradients, Worker import и reload; полные исходные файлы также открыты в WebGL/SVG.
+Текущий проверенный контур: **107 unit-тестов**, **67 browser-сценариев** и production TypeScript/Vite build. Дополнительно он включает DocumentChange и identity, виртуализацию 800 строк с доступностью последней, text layout/font generation, transient LOD с восстановлением полного кадра, shared downsampled image textures 512→2048, deferred root commit и live frame labels, invariance instances при main translation, nested Layers display updates, object operations/export, text tiling на 6400% и canvas-only pixel/hit-target alignment в старой и новооткрытой области. Community fixtures проверяют UI Prep embedded images + Inter + fit/reload и Globbb affine transforms с известными RGBA-пикселями; Transit Lines и BestProjects проверяют zero-size lines, stroke paints, page backgrounds, gradients, Worker import и reload; полные исходные файлы также открыты в WebGL/SVG. QA-пакет добавляет full multi-page backup, Group → Undo, popover/NumberField Escape, читаемые числовые значения и Figma primitives: Line/Arrow endpoints с WebGL/SVG/persistence, rotated hit-test, stroke editing/export, Polygon/Star params, JSON roundtrip, shape menu и стабильный ручной scroll в Layers.
 
 Количество тестов должно расти вместе с функциональностью. Обновляйте README, CHANGELOG, UX_AUDIT и эту историю только фактически проверенными сведениями.

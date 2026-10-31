@@ -14,7 +14,7 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 const toolShortcuts: Record<string, Tool> = {
-  v: 'select', h: 'hand', f: 'frame', r: 'rectangle', o: 'ellipse', t: 'text', i: 'image',
+  v: 'select', h: 'hand', f: 'frame', r: 'rectangle', o: 'ellipse', l: 'line', t: 'text', i: 'image',
 };
 
 export default function App() {
@@ -79,6 +79,11 @@ export default function App() {
       const key = event.code.startsWith('Key')
         ? event.code.slice(3).toLowerCase()
         : event.key.toLowerCase();
+      if (command && event.shiftKey && key === 'k') {
+        event.preventDefault();
+        state.setTool('image');
+        return;
+      }
       if (command && key === 'z') {
         event.preventDefault();
         if (event.shiftKey) state.redo(); else state.undo();
@@ -139,6 +144,9 @@ export default function App() {
         return;
       }
       if (event.key === 'Escape') {
+        // Let the topmost temporary UI layer consume Escape first. Its own
+        // window listener closes it and returns focus without deselecting the canvas.
+        if (document.querySelector('.popover, .canvas-context-menu')) return;
         state.setSelection([]);
         state.setTool('select');
         return;
@@ -154,6 +162,11 @@ export default function App() {
           state.reorder(state.selection[0], 'down');
           return;
         }
+      }
+      if (!command && !event.altKey && event.shiftKey && key === 'l') {
+        event.preventDefault();
+        state.setTool('arrow');
+        return;
       }
       if (!command && !event.altKey && toolShortcuts[key]) {
         event.preventDefault();

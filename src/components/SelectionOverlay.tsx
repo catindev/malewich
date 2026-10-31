@@ -1,9 +1,10 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
-import type { Bounds, DesignDocument, EditorNode } from '../types';
+import type { Bounds, DesignDocument, EditorNode, LinearNode } from '../types';
 import { getNodeBounds, getWorldMatrix, isNodeLocked } from '../utils/document';
 import { matrixToString, mergeBounds } from '../utils/geometry';
 
 export type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+export type LineEndpoint = 'start' | 'end';
 
 interface SelectionOverlayProps {
   doc: DesignDocument;
@@ -11,6 +12,7 @@ interface SelectionOverlayProps {
   zoom: number;
   onResize: (event: ReactPointerEvent<SVGGElement>, node: EditorNode, handle: ResizeHandle) => void;
   onRotate: (event: ReactPointerEvent<SVGGElement>, node: EditorNode) => void;
+  onEndpointDown: (event: ReactPointerEvent<SVGGElement>, node: LinearNode, endpoint: LineEndpoint) => void;
   onGroupResize: (event: ReactPointerEvent<SVGGElement>, bounds: Bounds, handle: ResizeHandle) => void;
   onGroupRotate: (event: ReactPointerEvent<SVGGElement>, bounds: Bounds) => void;
 }
@@ -56,26 +58,60 @@ function Handles({ bounds, zoom, onResize, onRotate, group = false }: {
   );
 }
 
-export function SelectionOverlay({ doc, nodes, zoom, onResize, onRotate, onGroupResize, onGroupRotate }: SelectionOverlayProps) {
+function LineEndpoints({ node, zoom, onEndpointDown }: {
+  node: LinearNode;
+  zoom: number;
+  onEndpointDown: SelectionOverlayProps['onEndpointDown'];
+}) {
+  return (
+    <>
+      {(['start', 'end'] as const).map((endpoint) => (
+        <g
+          key={endpoint} className="line-endpoint" data-endpoint={endpoint}
+          transform={`translate(${endpoint === 'start' ? node.x : node.x + node.width} ${node.y})`}
+          style={{ cursor: 'move' }} onPointerDown={(event) => onEndpointDown(event, node, endpoint)}
+        >
+          <circle r={5 / zoom} fill="#ffffff" stroke="#7357ff" strokeWidth={1.25 / zoom} />
+        </g>
+      ))}
+    </>
+  );
+}
+
+export function SelectionOverlay({
+  doc, nodes, zoom, onResize, onRotate, onEndpointDown, onGroupResize, onGroupRotate,
+}: SelectionOverlayProps) {
   const groupBounds = nodes.length > 1 ? mergeBounds(nodes.map((node) => getNodeBounds(doc, node))) : null;
   const groupLocked = nodes.some((node) => isNodeLocked(doc, node));
   return (
     <g className="selection-overlay">
-      {nodes.map((node) => (
-        <g key={node.id} transform={matrixToString(getWorldMatrix(doc, node))} className={isNodeLocked(doc, node) ? 'selection is-locked' : 'selection'}>
-          <rect
-            x={node.x} y={node.y} width={Math.max(node.width, 0.01)} height={Math.max(node.height, 0.01)}
-            fill="none" stroke="#7357ff" strokeWidth={1.25 / zoom}
-          />
-          {nodes.length === 1 && !isNodeLocked(doc, node) && (
-            <Handles
-              bounds={node} zoom={zoom}
-              onResize={(event, handle) => onResize(event, node, handle)}
-              onRotate={(event) => onRotate(event, node)}
-            />
-          )}
-        </g>
-      ))}
+      {nodes.map((node) => {
+        const linear = node.type === 'line' || node.type === 'arrow';
+        return (
+          <g key={node.id} transform={matrixToString(getWorldMatrix(doc, node))} className={isNodeLocked(doc, node) ? 'selection is-locked' : 'selection'}>
+            {linear ? (
+              <line
+                className="linear-selection" x1={node.x} y1={node.y} x2={node.x + node.width} y2={node.y}
+                fill="none" stroke="#7357ff" strokeWidth={1.25 / zoom}
+              />
+            ) : (
+              <rect
+                x={node.x} y={node.y} width={Math.max(node.width, 0.01)} height={Math.max(node.height, 0.01)}
+                fill="none" stroke="#7357ff" strokeWidth={1.25 / zoom}
+              />
+            )}
+            {nodes.length === 1 && !isNodeLocked(doc, node) && (linear ? (
+              <LineEndpoints node={node} zoom={zoom} onEndpointDown={onEndpointDown} />
+            ) : (
+              <Handles
+                bounds={node} zoom={zoom}
+                onResize={(event, handle) => onResize(event, node, handle)}
+                onRotate={(event) => onRotate(event, node)}
+              />
+            ))}
+          </g>
+        );
+      })}
       {groupBounds && !groupLocked && (
         <g className="selection group-selection">
           <rect

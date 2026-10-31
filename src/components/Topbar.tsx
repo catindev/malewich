@@ -40,7 +40,9 @@ const fileSize = (size: number) => size >= 1024 * 1024
   : `${Math.max(1, Math.ceil(size / 1024))} КБ`;
 
 export function ProjectControls({ panelsVisible, onTogglePanels }: ProjectControlsProps) {
-  const doc = usePageDocument();
+  // Project actions must use the full document, not the active-page projection.
+  // The canvas-facing projection would silently drop all other pages from JSON backup.
+  const doc = useEditorStore((state) => state.doc);
   const saveState = useEditorStore((state) => state.saveState);
   const renameDocument = useEditorStore((state) => state.renameDocument);
   const newDocument = useEditorStore((state) => state.newDocument);
@@ -52,6 +54,17 @@ export function ProjectControls({ panelsVisible, onTogglePanels }: ProjectContro
   const importRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => setTitle(doc.name), [doc.name]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setMenuOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [menuOpen]);
 
   const importDocument = async (file: File | undefined) => {
     if (!file || importing) return;

@@ -11,6 +11,7 @@ import { matrixToString, mergeBounds, nodeMatrix, round } from './geometry';
 import { fontFamilyWithFallback, getTextLines } from './text';
 import { fillReference, svgGradientDefinition } from './paints';
 import { vectorScale } from './rendering';
+import { arrowHeadLength, linearPath, parametricShapePath } from './shapes';
 
 function escapeXml(value: string): string {
   return value.replace(/[<>&"']/g, (character) => ({
@@ -39,6 +40,11 @@ function renderNode(doc: DesignDocument, node: EditorNode, root = false): string
   } else if (node.type === 'ellipse') {
     content += `<ellipse cx="${node.x + node.width / 2}" cy="${node.y + node.height / 2}" rx="${node.width / 2}" ry="${node.height / 2}" ${common}${insideStroke}/>`;
     if (insideStroke) content += `<defs><clipPath id="export-stroke-clip-${node.id}"><ellipse cx="${node.x + node.width / 2}" cy="${node.y + node.height / 2}" rx="${node.width / 2}" ry="${node.height / 2}"/></clipPath></defs>`;
+  } else if (node.type === 'line' || node.type === 'arrow') {
+    content += `<path d="${linearPath(node)}" fill="none" stroke="${escapeXml(node.stroke)}" stroke-width="${node.strokeWidth}"${dash}${cap}${join}/>`;
+  } else if (node.type === 'polygon' || node.type === 'star') {
+    content += `<path d="${parametricShapePath(node)}" ${common}${insideStroke}/>`;
+    if (insideStroke) content += `<defs><clipPath id="export-stroke-clip-${node.id}"><path d="${parametricShapePath(node)}"/></clipPath></defs>`;
   } else if (node.type === 'vector') {
     const scale = vectorScale(node);
     content += `<g transform="translate(${node.x} ${node.y}) scale(${scale.x} ${scale.y})"><path d="${escapeXml(node.path)}" fill="${escapeXml(fillReference(node, 'export-'))}" fill-rule="${node.fillRule ?? 'nonzero'}" stroke="${escapeXml(node.stroke)}" stroke-width="${node.strokeWidth}"${dash}${cap}${join}/></g>`;
@@ -81,7 +87,19 @@ export function getExportBounds(doc: DesignDocument, selection: string[]): Bound
   if (roots.length === 1 && roots[0].type === 'frame') return getNodeBounds(doc, roots[0]);
   const ids = new Set(roots.flatMap((node) => [node.id, ...getDescendantIds(doc, node.id)]));
   const nodes = flattenDocument(doc).filter((node) => ids.has(node.id) && node.visible);
-  return mergeBounds(nodes.map((node) => getNodeBounds(doc, node)));
+  return mergeBounds(nodes.map((node) => {
+    const bounds = getNodeBounds(doc, node);
+    const arrowPadding = node.type === 'arrow' && (node.startArrowhead || node.endArrowhead)
+      ? arrowHeadLength(node) : 0;
+    const padding = node.stroke !== 'transparent' && node.strokeWidth > 0
+      ? Math.max(node.strokeWidth / 2, arrowPadding) : 0;
+    return {
+      x: bounds.x - padding,
+      y: bounds.y - padding,
+      width: bounds.width + padding * 2,
+      height: bounds.height + padding * 2,
+    };
+  }));
 }
 
 export function documentToSvg(doc: DesignDocument, selection: string[] = []): { svg: string; bounds: Bounds } {

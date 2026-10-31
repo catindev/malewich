@@ -32,6 +32,7 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 - [AGENTS.md](AGENTS.md) — команды, границы и инварианты для coding-агентов.
 - [История разработки и архитектурных решений](docs/DEVELOPMENT_HISTORY.md) — этапы, альтернативы, ошибки и причины ключевых решений.
 - [UX_AUDIT.md](UX_AUDIT.md) — поведение относительно Figma и регрессионный контур.
+- [QA backlog от 31.10.2026](docs/QA_BACKLOG_2026-10-31.md) — приоритеты, закрытые MW-задачи и критерии приёмки.
 
 Репозиторий: <https://github.com/catindev/malewich>.
 
@@ -74,7 +75,9 @@ Community-регрессии покрывают `UI Prep Buttons (Community).fig
 - Prototype-переходы с интерактивным предпросмотром и историей; Presentation рисует выбранный экран непосредственным SVG с загруженными шрифтами, а клавиши плеера не изменяют документ за оверлеем;
 - компактный Figma-like Inspector с режимами «Дизайн / Прототип», позицией, выравниванием, Auto Layout, внешним видом и отдельными paint-секциями;
 - Dev Mode с генерацией CSS, токенами и подсветкой синтаксиса;
-- прямоугольники, эллипсы, текст, локальные изображения и SVG vector layers;
+- Figma-like dropdown для Rectangle, Ellipse, Line, Arrow, Polygon, Star и локального изображения: выбранный инструмент сохраняется как главная иконка списка; `L` создаёт линию, `Shift+L` — стрелку, `Shift+Cmd/Ctrl+K` выбирает изображение;
+- редактируемые Line/Arrow с двумя endpoints, нулевой высотой, точными X1/Y1/X2/Y2, длиной, углом и независимыми наконечниками стрелки; Polygon со сторонами и Star с числом лучей/inner radius; `Shift` ограничивает угол отрезка шагом 45° и пропорции замкнутых фигур; все primitives проходят через WebGL/SVG, persistence и export;
+- текст, локальные изображения и SVG vector layers;
 - иерархическое и marquee-выделение, deep-select и множественный выбор;
 - перемещение и resize со smart guides, сохранение пропорций и вращение;
 - групповые resize/rotate, выравнивание и распределение объектов;
@@ -97,8 +100,8 @@ Community-регрессии покрывают `UI Prep Buttons (Community).fig
 | Действие | Клавиши |
 | --- | --- |
 | Выделение / рука | `V` / `H` |
-| Фрейм / прямоугольник / эллипс | `F` / `R` / `O` |
-| Текст / изображение | `T` / `I` |
+| Фрейм / прямоугольник / эллипс / линия / стрелка | `F` / `R` / `O` / `L` / `⇧L` |
+| Текст / изображение | `T` / `I` или `⇧⌘K` |
 | Отменить / повторить | `⌘Z` / `⇧⌘Z` |
 | Дублировать / дублировать перетаскиванием | `⌘D` / `Alt+drag` |
 | Копировать / вырезать / вставить | `⌘C` / `⌘X` / `⌘V` |
@@ -107,7 +110,7 @@ Community-регрессии покрывают `UI Prep Buttons (Community).fig
 | Переместить на 1 px / 10 px | `стрелки` / `Shift+стрелки` |
 | Удалить | `Delete` или `Backspace` |
 | Временно включить руку | удерживать `Space` |
-| Сохранить пропорции / ограничить ось | удерживать `Shift` |
+| Сохранить пропорции / ограничить ось / угол линии к 45° | удерживать `Shift` |
 | Порядок слоя | `[` / `]` |
 | Масштаб 100% / вписать макет / вписать выделение | `0` / `⇧1` / `⇧2` |
 | Скрыть / показать боковые панели | `⌘\` / `Ctrl+\` |
@@ -121,7 +124,8 @@ Community-регрессии покрывают `UI Prep Buttons (Community).fig
 - `src/utils/figmaImport.ts` — decoder boundary и преобразование Figma SceneGraph в документ Malewich;
 - `src/utils/document.ts` — операции с иерархией объектов;
 - `src/utils/pages.ts` и `src/components/PagesPanel.tsx` — плоский список страниц, фон и производный документ активной страницы; legacy group metadata остаётся в модели для совместимости;
-- `src/utils/geometry.ts` — аффинные преобразования;
+- `src/utils/geometry.ts` — аффинные преобразования и endpoint-pivot для Line/Arrow;
+- `src/utils/shapes.ts` — производные endpoints, arrowheads и paths параметрических Polygon/Star;
 - `src/utils/groupTransform.ts` — групповые трансформации и выравнивание;
 - `src/utils/nodeOperations.ts` — группировка, перенос между страницами, порядок, flatten, outline stroke и отражение объектов;
 - `src/utils/autoLayout.ts` — итеративный layout с Hug/Fixed/Fill, constraints и scoped reflow;

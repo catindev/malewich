@@ -55,6 +55,7 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 ### Геометрия и editing
 
 - Координаты узлов абсолютные в page-space. При перемещении родителя потомки получают тот же мировой delta ровно один раз.
+- Line/Arrow хранят start в `x/y`, длину в `width`, угол в `rotation` и `height = 0`; rotation/pivot — первая endpoint во всех renderer и hit-test. Не возвращайте center-pivot или bounding-box handles: selection редактирует две endpoints, а `shapes.ts` получает paths из исходных параметров.
 - Auto Layout использует parent-relative геометрию. Не применяйте быстрый `preserveRelativeGeometry` путь к перемещению ребёнка внутри Auto Layout.
 - Сохраняйте clipping, masks, transforms и z-order. `flipX`/`flipY` участвуют в общей affine matrix, Pixi container scale, SVG/export и hit-test. Не выводите nested frame в compositor overlay без учёта предков.
 - Selection handles, labels и text editor остаются в SVG; canvas dots не должны перекрывать объекты или UI.
@@ -95,7 +96,7 @@ PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm run test:e2e
 
 ## Тесты и регрессии
 
-Базовый снимок содержит 67 unit-тестов и 44 browser-сценария; текущий контур после DocumentChange, виртуализации Layers, text layout cache, transient LOD, image buckets, SMZ, vector/mask, page/UI, extreme zoom/nonzero rendering, text tiling, object operations/export, deferred root labels, component/layer optimizations, branding, canvas-only exposed-pixel, community import и lines/gradient/page-background regressions — 100 и 60 соответственно. При добавлении тестов обновляйте документацию с фактическими числами.
+Базовый снимок содержит 67 unit-тестов и 44 browser-сценария; текущий контур после DocumentChange, виртуализации Layers, text layout cache, transient LOD, image buckets, SMZ, vector/mask, page/UI, extreme zoom/nonzero rendering, text tiling, object operations/export, deferred root labels, component/layer optimizations, branding, canvas-only exposed-pixel, community import, lines/gradient/page-background, QA и Figma primitives/endpoints regressions — 107 и 67 соответственно. При добавлении тестов обновляйте документацию с фактическими числами.
 
 Обязательные специальные проверки:
 

@@ -5,7 +5,7 @@ const DB_NAME = 'malewich-editor';
 const DB_VERSION = 1;
 const STORE_NAME = 'documents';
 const CURRENT_DOCUMENT = 'current';
-const nodeTypes: NodeType[] = ['frame', 'rectangle', 'ellipse', 'text', 'image', 'vector'];
+const nodeTypes: NodeType[] = ['frame', 'rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'star', 'text', 'image', 'vector'];
 
 let databasePromise: Promise<IDBDatabase> | null = null;
 

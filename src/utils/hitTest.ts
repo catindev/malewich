@@ -1,5 +1,6 @@
 import type { DesignDocument, EditorNode, Matrix, Point } from '../types';
 import { applyMatrix, identityMatrix, invertMatrix, multiplyMatrix, nodeMatrix } from './geometry';
+import { linearSegments } from './shapes';
 
 interface IndexedNode {
   node: EditorNode;
@@ -30,6 +31,15 @@ function indexScene(doc: DesignDocument): IndexedNode[] {
   return result;
 }
 
+function pointSegmentDistance(point: Point, start: Point, end: Point): number {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = lengthSquared > 0
+    ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared)) : 0;
+  return Math.hypot(point.x - start.x - t * dx, point.y - start.y - t * dy);
+}
+
 /** Geometry hit-testing for the WebGL canvas; no DOM node per scene layer is required. */
 export function hitTestNode(doc: DesignDocument, point: Point): EditorNode | null {
   const nodes = indexScene(doc);
@@ -37,6 +47,14 @@ export function hitTestNode(doc: DesignDocument, point: Point): EditorNode | nul
     const { node, world, visible } = nodes[index];
     if (!visible) continue;
     const local = applyMatrix(invertMatrix(world), point);
+    if (node.type === 'line' || node.type === 'arrow') {
+      // Zero-height segments remain selectable around their visible stroke,
+      // including arrowheads outside the shaft's geometric bounds.
+      const tolerance = Math.max(4, node.strokeWidth / 2);
+      if (linearSegments(node).some(([start, end]) =>
+        pointSegmentDistance(local, start, end) <= tolerance,
+      )) return node;
+    }
     if (
       local.x >= node.x && local.x <= node.x + node.width &&
       local.y >= node.y && local.y <= node.y + node.height

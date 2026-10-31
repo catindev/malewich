@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Minus, Plus, RotateCcw } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
 import { fitViewportToContent, fitViewportToSelection, zoomViewportAt } from '../utils/viewport';
@@ -9,6 +9,17 @@ export function ZoomControls() {
   const selection = useEditorStore((state) => state.selection);
   const [menuOpen, setMenuOpen] = useState(false);
   const zoomPercent = Math.round(viewport.zoom * 100);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setMenuOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [menuOpen]);
 
   const zoomTo = (nextZoom: number) => {
     const rect = document.querySelector('.canvas-viewport')?.getBoundingClientRect();

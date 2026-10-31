@@ -5,6 +5,7 @@ import { matrixToString, nodeMatrix } from '../utils/geometry';
 import { fontFamilyWithFallback, getTextLines } from '../utils/text';
 import { fillReference, gradientId, svgGradientTransform } from '../utils/paints';
 import { vectorScale } from '../utils/rendering';
+import { linearPath, parametricShapePath } from '../utils/shapes';
 
 interface SceneNodeProps {
   doc: DesignDocument;
@@ -130,6 +131,20 @@ export function SceneNode({
           <ellipse cx={node.x + node.width / 2} cy={node.y + node.height / 2} rx={node.width / 2} ry={node.height / 2} {...common} />
           {insideStrokeClip && <clipPath id={`stroke-clip-${node.id}`}>
             <ellipse cx={node.x + node.width / 2} cy={node.y + node.height / 2} rx={node.width / 2} ry={node.height / 2} />
+          </clipPath>}
+        </>
+      )}
+      {(node.type === 'line' || node.type === 'arrow') && (
+        <path
+          d={linearPath(node)} fill="none" stroke={node.stroke} strokeWidth={node.strokeWidth}
+          strokeDasharray={node.strokeDash?.join(' ')} strokeLinecap={node.strokeCap} strokeLinejoin={node.strokeJoin}
+        />
+      )}
+      {(node.type === 'polygon' || node.type === 'star') && (
+        <>
+          <path d={parametricShapePath(node)} {...common} />
+          {insideStrokeClip && <clipPath id={`stroke-clip-${node.id}`}>
+            <path d={parametricShapePath(node)} />
           </clipPath>}
         </>
       )}

@@ -255,6 +255,71 @@ test('changes and saves the active page background without changing other pages'
   await expect(page.locator('.canvas-viewport')).toHaveCSS('background-color', 'rgb(243, 232, 211)');
 });
 
+test('saves a complete multi-page project copy from every active page', async ({ page }) => {
+  await seed(page, [frame('screen-a', 'Screen A')]);
+  await page.getByRole('button', { name: 'Новая страница' }).click();
+  await expect(page.locator('.page-row.is-active')).toContainText('Страница 2');
+  await page.getByRole('button', { name: 'Создать фрейм' }).click();
+  await page.getByLabel('Название слоя').fill('Screen B');
+  await page.getByLabel('Название слоя').press('Enter');
+  await expect(page.locator('.layer-name')).toContainText('Screen B');
+  await page.locator('[data-page-id="page-1"]').click();
+  await expect(page.locator('[data-layer-id="screen-a"]')).toBeVisible();
+  await expect(page.locator('.save-indicator')).toContainText('Сохранено локально');
+
+  await page.getByRole('button', { name: 'Меню проекта' }).click();
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Сохранить копию' }).click();
+  const download = await downloadPromise;
+  const stream = await download.createReadStream();
+  if (!stream) throw new Error('Backup stream is unavailable');
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+  const backup = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  expect(backup.pages).toHaveLength(2);
+  expect(backup.nodes).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: 'screen-a', pageId: 'page-1' }),
+    expect.objectContaining({ name: 'Screen B', pageId: expect.any(String) }),
+  ]));
+  expect(backup.nodes.filter((node: { parentId: string | null }) => node.parentId === null)).toHaveLength(2);
+});
+
+test('cancels numeric inspector drafts and keeps opacity readable', async ({ page }) => {
+  await seed(page, [frame('screen-a', 'Screen A')]);
+  await page.locator('[data-layer-id="screen-a"]').click();
+  const opacity = page.locator('label.number-field').filter({ hasText: 'Непрозрачность' }).locator('input');
+  await expect(opacity).toHaveValue('100');
+  await expect(opacity).toBeVisible();
+  expect(await opacity.evaluate((input) => input.getBoundingClientRect().width)).toBeGreaterThan(20);
+  await opacity.fill('999');
+  await opacity.press('Escape');
+  await page.locator('.inspector-header').click();
+  await expect(opacity).toHaveValue('100');
+  expect(await page.evaluate(() => {
+    const doc = JSON.parse(localStorage.getItem('malewich:document:v1')!);
+    return doc.nodes.find((node: { id: string }) => node.id === 'screen-a')?.opacity;
+  })).toBe(1);
+});
+
+test('closes temporary popovers with Escape without clearing selection', async ({ page }) => {
+  await seed(page, [frame('screen-a', 'Screen A')]);
+  await page.locator('[data-layer-id="screen-a"]').click();
+  await page.getByTitle('Горячие клавиши').click();
+  await expect(page.locator('.shortcuts-popover')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.shortcuts-popover')).toHaveCount(0);
+  await expect(page.locator('[data-layer-id="screen-a"]')).toHaveClass(/is-selected/);
+
+  await page.getByRole('button', { name: 'Меню проекта' }).click();
+  await expect(page.locator('.topbar-menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.topbar-menu')).toHaveCount(0);
+  await page.locator('.zoom-value').click();
+  await expect(page.locator('.zoom-menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.zoom-menu')).toHaveCount(0);
+});
+
 test('opens custom canvas and layer context menus including Control-click', async ({ page }) => {
   await seed(page, [frame('screen-a', 'Screen A')]);
   await page.locator('[data-node-id="screen-a"]').click({ button: 'right', modifiers: ['Control'] });

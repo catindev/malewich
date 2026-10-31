@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
+  MoveRight,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -14,9 +15,12 @@ import {
   Image as ImageIcon,
   Layers3,
   Lock,
+  Minus,
   PenTool,
   Rows3,
-  Square,
+  RectangleHorizontal,
+  Star as StarIcon,
+  Triangle,
   Type,
   Unlock,
 } from 'lucide-react';
@@ -37,8 +41,12 @@ const LAYER_OVERSCAN = 6;
 
 const typeIcons: Record<NodeType, typeof Frame> = {
   frame: Frame,
-  rectangle: Square,
+  rectangle: RectangleHorizontal,
   ellipse: Circle,
+  line: Minus,
+  arrow: MoveRight,
+  polygon: Triangle,
+  star: StarIcon,
   text: Type,
   image: ImageIcon,
   vector: PenTool,
@@ -54,7 +62,8 @@ function layerKind(node: EditorNode): { label: string; Icon: typeof Frame; class
       : { label: 'Auto Layout · вертикальный', Icon: Rows3, className: 'is-auto-layout' };
   }
   const labels: Record<NodeType, string> = {
-    frame: 'Фрейм', rectangle: 'Прямоугольник', ellipse: 'Эллипс',
+    frame: 'Фрейм', rectangle: 'Прямоугольник', ellipse: 'Эллипс', line: 'Линия',
+    arrow: 'Стрелка', polygon: 'Многоугольник', star: 'Звезда',
     text: 'Текст', image: 'Изображение', vector: 'Вектор',
   };
   return { label: labels[node.type], Icon: typeIcons[node.type], className: '' };
@@ -131,6 +140,8 @@ function LayerRowComponent({ node, depth, hasChildren, collapsed, setCollapsed, 
       {hasChildren ? (
         <button
           className="layer-disclosure"
+          aria-label={isExpanded ? 'Свернуть слой' : 'Раскрыть слой'}
+          aria-expanded={isExpanded}
           onClick={(event) => {
             event.stopPropagation();
             const next = new Set(collapsed);
@@ -214,6 +225,7 @@ export function LayersPanel({ hidden = false, panelsVisible, onTogglePanels }: L
   const [contextMenu, setContextMenu] = useState<{ nodeId: string; x: number; y: number } | null>(null);
   const [scrollState, setScrollState] = useState({ top: 0, height: 0 });
   const layersTreeRef = useRef<HTMLDivElement>(null);
+  const selectionScrollPendingRef = useRef(true);
   const selectionKey = selection.join('|');
   const activePageId = getActivePageId(doc);
   const childrenByParent = useMemo(() => {
@@ -265,7 +277,11 @@ export function LayersPanel({ hidden = false, panelsVisible, onTogglePanels }: L
   }, [tab]);
 
   useEffect(() => {
-    if (!selectionKey || tab !== 'layers') return;
+    selectionScrollPendingRef.current = true;
+  }, [selectionKey, tab, activePageId]);
+
+  useEffect(() => {
+    if (!selectionKey || tab !== 'layers' || !selectionScrollPendingRef.current) return;
     const frame = requestAnimationFrame(() => {
       const tree = layersTreeRef.current;
       if (!tree) return;
@@ -273,6 +289,7 @@ export function LayersPanel({ hidden = false, panelsVisible, onTogglePanels }: L
       if (index < 0) return;
       const target = Math.max(0, index * LAYER_ROW_HEIGHT - tree.clientHeight / 2 + LAYER_ROW_HEIGHT / 2);
       tree.scrollTop = target;
+      selectionScrollPendingRef.current = false;
       setScrollState({ top: tree.scrollTop, height: tree.clientHeight });
     });
     return () => cancelAnimationFrame(frame);

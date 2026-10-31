@@ -157,6 +157,20 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .tool-rail[hidden] { display: none; }
 .tool-rail-main { display: flex; flex-direction: column; align-items: center; gap: 3px; width: 100%; }
 .tool-group-start { margin-top: 8px; padding-top: 8px; border-top: 1px solid #ededed; }
+.shape-tool-wrap { position: relative; }
+.shape-menu-toggle {
+  position: absolute; right: -1px; bottom: 0; z-index: 2; width: 13px; height: 13px;
+  display: grid; place-items: center; padding: 0; border-radius: 3px; background: var(--panel); color: #777;
+}
+.shape-menu-toggle:hover, .shape-menu-toggle[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+.shape-tools-popover { left: 43px; top: 0; width: 218px; }
+.shape-tools-popover button {
+  width: 100%; height: 34px; display: flex; align-items: center; gap: 9px; padding: 0 9px;
+  border-radius: 5px; font-size: 12px; text-align: left;
+}
+.shape-tools-popover button:hover { background: #f2f2f2; }
+.shape-tools-popover button span { flex: 1; }
+.shape-tools-popover button[aria-checked="true"] { color: var(--accent); background: var(--accent-soft); }
 .tool-button {
   width: 34px; height: 34px; display: grid; place-items: center; border-radius: 6px;
   color: #555; position: relative;
@@ -287,7 +301,7 @@ kbd {
 .selection-overlay { pointer-events: none; }
 .selection { pointer-events: none; }
 .selection.is-locked rect { stroke-dasharray: 4 3; }
-.resize-handle, .rotation-handle { pointer-events: all; }
+.resize-handle, .rotation-handle, .line-endpoint { pointer-events: all; }
 .rotation-handle { cursor: grab; }
 .rotation-handle:active { cursor: grabbing; }
 .workspace.is-panel-hidden .canvas-mode-hint { display: none; }
@@ -353,9 +367,9 @@ kbd {
   border: 1px solid #e5e5e5; border-radius: 5px; background: #fafafa;
 }
 .number-field:focus-within { border-color: var(--accent); background: white; }
-.number-field > span { flex: 0 0 auto; min-width: 17px; color: #999; font-size: 9px; }
-.number-field input { width: 100%; min-width: 0; height: 100%; padding: 0 2px; border: 0; outline: 0; background: transparent; color: #444; font-size: 10px; }
-.number-field em { color: #aaa; font-size: 9px; font-style: normal; }
+.number-field > span { flex: 0 1 auto; min-width: 0; max-width: 50%; overflow: hidden; color: #999; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.number-field input { flex: 1 1 0; width: auto; min-width: 2ch; height: 100%; padding: 0 2px; border: 0; outline: 0; background: transparent; color: #444; font-size: 10px; }
+.number-field em { flex: 0 0 auto; color: #aaa; font-size: 9px; font-style: normal; }
 .property-section > .number-field { margin-top: 7px; }
 .color-field { display: block; margin-bottom: 10px; }
 .property-label { display: block; margin-bottom: 5px; color: #999; font-size: 9px; }

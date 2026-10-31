@@ -1,4 +1,4 @@
-export type NodeType = 'frame' | 'rectangle' | 'ellipse' | 'text' | 'image' | 'vector';
+export type NodeType = 'frame' | 'rectangle' | 'ellipse' | 'line' | 'arrow' | 'polygon' | 'star' | 'text' | 'image' | 'vector';
 export type Tool = 'select' | 'hand' | NodeType;
 export type TextAlign = 'left' | 'center' | 'right';
 
@@ -108,6 +108,30 @@ export interface EllipseNode extends BaseNode {
   fill: string;
 }
 
+export interface LineNode extends BaseNode {
+  type: 'line';
+}
+
+export interface ArrowNode extends BaseNode {
+  type: 'arrow';
+  startArrowhead: boolean;
+  endArrowhead: boolean;
+}
+
+export interface PolygonNode extends BaseNode {
+  type: 'polygon';
+  fill: string;
+  sides: number;
+}
+
+export interface StarNode extends BaseNode {
+  type: 'star';
+  fill: string;
+  points: number;
+  /** Ratio of the inner vertex radius to the outer radius, from 0 to 1. */
+  innerRadius: number;
+}
+
 export interface TextNode extends BaseNode {
   type: 'text';
   fill: string;
@@ -140,7 +164,9 @@ export interface VectorNode extends BaseNode {
   fillRule?: 'nonzero' | 'evenodd';
 }
 
-export type EditorNode = FrameNode | RectangleNode | EllipseNode | TextNode | ImageNode | VectorNode;
+export type EditorNode = FrameNode | RectangleNode | EllipseNode | LineNode | ArrowNode | PolygonNode | StarNode | TextNode | ImageNode | VectorNode;
+export type LinearNode = LineNode | ArrowNode;
+export type ParametricShapeNode = PolygonNode | StarNode;
 export type EditorNodeInput = Omit<EditorNode, 'id' | 'name'> & { id?: string; name?: string };
 
 export interface ColorStyleDefinition {

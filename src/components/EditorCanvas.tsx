@@ -16,6 +16,7 @@ import type {
   Bounds,
   DesignDocument,
   EditorNode,
+  LinearNode,
   NodeType,
   Point,
   TextNode,
@@ -55,7 +56,8 @@ import { CanvasContextMenu } from './CanvasContextMenu';
 import { HitLayer } from './HitLayer';
 import { PixiScene } from './PixiScene';
 import { SceneNode } from './SceneNode';
-import { SelectionOverlay, type ResizeHandle } from './SelectionOverlay';
+import { SelectionOverlay, type LineEndpoint, type ResizeHandle } from './SelectionOverlay';
+import { constrainedEndpoint, linearEndpoints, linearNodePatch } from '../utils/shapes';
 import { TextEditor } from './TextEditor';
 import { usePageDocument } from '../hooks/usePageDocument';
 import { getActivePageId, getDocumentPages, getPageDocument } from '../utils/pages';
@@ -68,10 +70,11 @@ type Interaction =
   | { kind: 'move'; pointerId: number; startWorld: Point; startDoc: DesignDocument; ids: string[]; rootIds: string[]; targetId: string; additive: boolean; moved: boolean; snapBounds: Bounds[]; deferDocument: boolean; lastDelta: Point }
   | { kind: 'resize'; pointerId: number; startWorld: Point; startDoc: DesignDocument; node: EditorNode; handle: ResizeHandle }
   | { kind: 'rotate'; pointerId: number; startDoc: DesignDocument; node: EditorNode; center: Point; startAngle: number }
+  | { kind: 'lineEndpoint'; pointerId: number; startDoc: DesignDocument; node: LinearNode; endpoint: LineEndpoint }
   | { kind: 'groupResize'; pointerId: number; startWorld: Point; startDoc: DesignDocument; ids: string[]; startBounds: Bounds; handle: ResizeHandle }
   | { kind: 'groupRotate'; pointerId: number; startDoc: DesignDocument; ids: string[]; center: Point; startAngle: number };
 
-const drawingTools: NodeType[] = ['frame', 'rectangle', 'ellipse'];
+const drawingTools: NodeType[] = ['frame', 'rectangle', 'ellipse', 'line', 'arrow', 'polygon', 'star'];
 
 function transformVector(matrix: { a: number; b: number; c: number; d: number }, vector: Point): Point {
   return {
@@ -262,6 +265,28 @@ export function EditorCanvas() {
     };
   }, [fitSelection, fitToContent, zoomTo]);
 
+  useEffect(() => {
+    const cancelInteraction = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const interaction = interactionRef.current;
+      if (interaction?.kind !== 'draw' && interaction?.kind !== 'lineEndpoint') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const state = useEditorStore.getState();
+      state.transient(() => interaction.startDoc);
+      if (interaction.kind === 'draw') {
+        state.setSelection([]);
+        state.setTool('select');
+      }
+      if (svgRef.current?.hasPointerCapture(interaction.pointerId)) {
+        svgRef.current.releasePointerCapture(interaction.pointerId);
+      }
+      interactionRef.current = null;
+    };
+    window.addEventListener('keydown', cancelInteraction);
+    return () => window.removeEventListener('keydown', cancelInteraction);
+  }, []);
+
   const createText = (world: Point) => {
     const state = useEditorStore.getState();
     const pageDoc = getPageDocument(state.doc);
@@ -423,6 +448,16 @@ export function EditorCanvas() {
     svgRef.current?.setPointerCapture(event.pointerId);
   };
 
+  const handleEndpointDown = (event: ReactPointerEvent<SVGGElement>, node: LinearNode, endpoint: LineEndpoint) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const state = useEditorStore.getState();
+    interactionRef.current = {
+      kind: 'lineEndpoint', pointerId: event.pointerId, startDoc: state.doc, node: { ...node }, endpoint,
+    };
+    svgRef.current?.setPointerCapture(event.pointerId);
+  };
+
   const getTransformIds = (stateDoc: DesignDocument, ids: string[]) => ids.filter((id) => {
     const node = getNode(stateDoc, id);
     return node && !isNodeLocked(stateDoc, node) && !ids.some(
@@ -478,6 +513,20 @@ export function EditorCanvas() {
     }
     const world = screenToWorld(event.clientX, event.clientY);
     if (interaction.kind === 'move' && !interaction.moved) return;
+    if (interaction.kind === 'lineEndpoint') {
+      const current = pointInParentCoordinates(interaction.startDoc, interaction.node.parentId, world);
+      const endpoints = linearEndpoints(interaction.node);
+      const fixed = interaction.endpoint === 'start' ? endpoints.end : endpoints.start;
+      const moving = constrainedEndpoint(fixed, current, event.shiftKey);
+      const patch = interaction.endpoint === 'start'
+        ? linearNodePatch(moving, fixed) : linearNodePatch(fixed, moving);
+      state.transient((currentDoc) => ({
+        ...currentDoc,
+        nodes: currentDoc.nodes.map((node) => node.id === interaction.node.id
+          ? { ...node, ...patch } as EditorNode : node),
+      }));
+      return;
+    }
     if (interaction.kind === 'marquee') {
       setMarquee({ start: interaction.startWorld, current: world });
       const bounds = normalizeRect(interaction.startWorld, world);
@@ -495,6 +544,17 @@ export function EditorCanvas() {
     }
     if (interaction.kind === 'draw') {
       const current = pointInParentCoordinates(state.doc, interaction.parentId, world);
+      const drawingNode = getNode(state.doc, interaction.nodeId);
+      if (drawingNode?.type === 'line' || drawingNode?.type === 'arrow') {
+        const end = constrainedEndpoint(interaction.startLocal, current, event.shiftKey);
+        const patch = linearNodePatch(interaction.startLocal, end);
+        state.transient((currentDoc) => ({
+          ...currentDoc,
+          nodes: currentDoc.nodes.map((node) => node.id === interaction.nodeId
+            ? { ...node, ...patch } as EditorNode : node),
+        }));
+        return;
+      }
       let bounds = normalizeRect(interaction.startLocal, current);
       if (event.shiftKey) {
         const size = Math.max(bounds.width, bounds.height);
@@ -743,7 +803,12 @@ export function EditorCanvas() {
     }
     if (interaction.kind === 'draw') {
       const node = getNode(state.doc, interaction.nodeId);
-      if (node && node.width < 4 && node.height < 4) {
+      if (node?.type === 'line' || node?.type === 'arrow') {
+        if (node.width < 4) {
+          state.transient((current) => ({ ...current, nodes: current.nodes.filter((candidate) => candidate.id !== node.id) }));
+          state.setSelection([]);
+        }
+      } else if (node && node.width < 4 && node.height < 4) {
         const isFrame = node.type === 'frame';
         const width = isFrame ? 800 : 160;
         const height = isFrame ? 600 : 120;
@@ -989,7 +1054,7 @@ export function EditorCanvas() {
             <g transform={deferredMoveDelta ? `translate(${deferredMoveDelta.x} ${deferredMoveDelta.y})` : undefined}>
               <SelectionOverlay
                 doc={doc} nodes={editingId ? [] : selectedNodes} zoom={viewport.zoom}
-                onResize={handleResize} onRotate={handleRotate}
+                onResize={handleResize} onRotate={handleRotate} onEndpointDown={handleEndpointDown}
                 onGroupResize={handleGroupResize} onGroupRotate={handleGroupRotate}
               />
             </g>
