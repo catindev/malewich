@@ -27,7 +27,8 @@ import {
   Unlock,
 } from 'lucide-react';
 import { useEditorStore } from '../store/editorStore';
-import type { AutoLayoutSettings, EditorNode, TextAlign, TextNode } from '../types';
+import type { AutoLayoutSettings, EditorNode, LinearNode, TextAlign, TextNode } from '../types';
+import { linearEndpoints, linearNodePatch } from '../utils/shapes';
 import { createAutoLayout } from '../utils/autoLayout';
 import { getNode } from '../utils/document';
 import { measureAutoText } from '../utils/text';
@@ -51,9 +52,18 @@ interface NumberFieldProps {
 function NumberField({ label, value, onCommit, min = -100000, max = 100000, step = 1, suffix }: NumberFieldProps) {
   const format = (number: number) => String(Math.round(number * 100) / 100);
   const [draft, setDraft] = useState(format(value));
-  useEffect(() => setDraft(format(value)), [value]);
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    if (!cancelledRef.current) setDraft(format(value));
+    cancelledRef.current = false;
+  }, [value]);
 
   const commit = () => {
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      setDraft(format(value));
+      return;
+    }
     const parsed = Number(draft.replace(',', '.'));
     if (Number.isFinite(parsed)) onCommit(Math.min(max, Math.max(min, parsed)));
     else setDraft(format(value));
@@ -65,8 +75,16 @@ function NumberField({ label, value, onCommit, min = -100000, max = 100000, step
       <input
         value={draft} inputMode="decimal"
         onChange={(event) => setDraft(event.target.value)}
+        onFocus={() => { cancelledRef.current = false; }}
         onBlur={commit}
         onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            cancelledRef.current = true;
+            setDraft(format(value));
+            event.currentTarget.blur();
+            return;
+          }
           if (event.key === 'Enter') event.currentTarget.blur();
           if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault();
@@ -125,6 +143,27 @@ function PropertySection({ title, children, action, className = '' }: { title: s
       <div className="property-section-heading"><h3>{title}</h3>{action}</div>
       {children}
     </section>
+  );
+}
+
+function LinearEndpointFields({ node, onCommit }: {
+  node: LinearNode;
+  onCommit: (patch: ReturnType<typeof linearNodePatch>) => void;
+}) {
+  const endpoints = linearEndpoints(node);
+  const commit = (endpoint: 'start' | 'end', axis: 'x' | 'y', value: number) => {
+    const next = { ...endpoints, [endpoint]: { ...endpoints[endpoint], [axis]: value } };
+    onCommit(linearNodePatch(next.start, next.end));
+  };
+  return (
+    <PropertySection title="Конечные точки">
+      <div className="property-grid">
+        <NumberField label="X1" value={endpoints.start.x} onCommit={(value) => commit('start', 'x', value)} />
+        <NumberField label="Y1" value={endpoints.start.y} onCommit={(value) => commit('start', 'y', value)} />
+        <NumberField label="X2" value={endpoints.end.x} onCommit={(value) => commit('end', 'x', value)} />
+        <NumberField label="Y2" value={endpoints.end.y} onCommit={(value) => commit('end', 'y', value)} />
+      </div>
+    </PropertySection>
   );
 }
 
@@ -321,7 +360,7 @@ export function Inspector({ hidden = false, theme, onToggleTheme }: InspectorPro
                   </span>
                 ) : node.type === 'frame' && node.autoLayout ? null : (
                   <span className={`node-type-pill is-${node.type}`}>
-                    {node.type === 'rectangle' || node.type === 'ellipse' ? 'Фигура' : node.type === 'frame' && !node.autoLayout ? node.isGroup ? 'Группа' : 'Фрейм' : node.type === 'text' ? 'Текст' : node.type === 'vector' ? 'Вектор' : node.type === 'image' ? 'Изображение' : ''}
+                    {node.type === 'rectangle' || node.type === 'ellipse' || node.type === 'polygon' || node.type === 'star' ? 'Фигура' : node.type === 'line' ? 'Линия' : node.type === 'arrow' ? 'Стрелка' : node.type === 'frame' && !node.autoLayout ? node.isGroup ? 'Группа' : 'Фрейм' : node.type === 'text' ? 'Текст' : node.type === 'vector' ? 'Вектор' : node.type === 'image' ? 'Изображение' : ''}
                   </span>
                 )}
                 {node.type === 'frame' && node.autoLayout && (
@@ -345,11 +384,43 @@ export function Inspector({ hidden = false, theme, onToggleTheme }: InspectorPro
               <div className="property-grid">
                 <NumberField label="X" value={node.x} onCommit={(x) => updateNode(node.id, { x })} />
                 <NumberField label="Y" value={node.y} onCommit={(y) => updateNode(node.id, { y })} />
-                <NumberField label="W" value={node.width} min={1} onCommit={(width) => updateNode(node.id, { width, ...(node.type === 'text' ? { autoSize: 'none' as const } : {}) })} />
-                <NumberField label="H" value={node.height} min={1} onCommit={(height) => updateNode(node.id, { height, ...(node.type === 'text' ? { autoSize: 'none' as const } : {}) })} />
+                {node.type === 'line' || node.type === 'arrow' ? (
+                  <NumberField label="Длина" value={node.width} min={0} onCommit={(width) => updateNode(node.id, { width })} />
+                ) : (
+                  <>
+                    <NumberField label="W" value={node.width} min={1} onCommit={(width) => updateNode(node.id, { width, ...(node.type === 'text' ? { autoSize: 'none' as const } : {}) })} />
+                    <NumberField label="H" value={node.height} min={1} onCommit={(height) => updateNode(node.id, { height, ...(node.type === 'text' ? { autoSize: 'none' as const } : {}) })} />
+                  </>
+                )}
               </div>
               <NumberField label="Угол" value={node.rotation} min={-360} max={360} step={1} suffix="°" onCommit={(rotation) => updateNode(node.id, { rotation })} />
             </PropertySection>
+            {(node.type === 'line' || node.type === 'arrow') && (
+              <LinearEndpointFields node={node} onCommit={(patch) => updateNode(node.id, patch)} />
+            )}
+            {node.type === 'arrow' && (
+              <PropertySection title="Наконечники">
+                <label className="checkbox-property">
+                  <input type="checkbox" aria-label="Наконечник в начале" checked={node.startArrowhead} onChange={(event) => updateNode(node.id, { startArrowhead: event.target.checked })} />
+                  <span>В начале</span>
+                </label>
+                <label className="checkbox-property">
+                  <input type="checkbox" aria-label="Наконечник в конце" checked={node.endArrowhead} onChange={(event) => updateNode(node.id, { endArrowhead: event.target.checked })} />
+                  <span>В конце</span>
+                </label>
+              </PropertySection>
+            )}
+            {node.type === 'polygon' && (
+              <PropertySection title="Фигура">
+                <NumberField label="Стороны" value={node.sides} min={3} max={100} onCommit={(sides) => updateNode(node.id, { sides: Math.round(sides) })} />
+              </PropertySection>
+            )}
+            {node.type === 'star' && (
+              <PropertySection title="Фигура">
+                <NumberField label="Лучи" value={node.points} min={3} max={100} onCommit={(points) => updateNode(node.id, { points: Math.round(points) })} />
+                <NumberField label="Внутренний радиус" value={Math.round(node.innerRadius * 100)} min={1} max={100} suffix="%" onCommit={(innerRadius) => updateNode(node.id, { innerRadius: innerRadius / 100 })} />
+              </PropertySection>
+            )}
             {parentNode?.type === 'frame' && parentNode.autoLayout && (() => {
               const childLayout = node.layout ?? { horizontal: 'fixed' as const, vertical: 'fixed' as const, absolute: false };
               const patchChildLayout = (patch: Partial<NonNullable<EditorNode['layout']>>) => updateNode(node.id, { layout: { ...childLayout, ...patch } });

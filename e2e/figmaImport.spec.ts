@@ -24,18 +24,21 @@ async function pngPixel(page: import('@playwright/test').Page, png: Buffer, x: n
 }
 
 async function revealLayer(page: import('@playwright/test').Page, id: string) {
-  await page.locator('.layers-tree').evaluate(async (tree, layerId) => {
-    if (tree.querySelector(`[data-layer-id="${layerId}"]`)) return;
-    for (let top = 0; top <= tree.scrollHeight; top += Math.max(1, tree.clientHeight)) {
-      tree.scrollTop = top;
-      const visible = await new Promise<boolean>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve(Boolean(tree.querySelector(`[data-layer-id="${layerId}"]`)))));
-      });
-      if (visible) return;
-    }
-    throw new Error(`Layer ${layerId} is not reachable in the virtualized list`);
-  }, id);
-  await expect(page.locator(`[data-layer-id="${id}"]`)).toBeVisible();
+  const row = page.locator(`[data-layer-id="${id}"]`);
+  await expect.poll(async () => {
+    if (await row.count() && await row.isVisible()) return true;
+    return page.locator('.layers-tree').evaluate(async (tree, layerId) => {
+      for (let top = 0; top <= tree.scrollHeight; top += Math.max(1, tree.clientHeight)) {
+        tree.scrollTop = top;
+        const visible = await new Promise<boolean>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(Boolean(tree.querySelector(`[data-layer-id="${layerId}"]`)))));
+        });
+        if (visible) return true;
+      }
+      throw new Error(`Layer ${layerId} is not reachable in the virtualized list`);
+    }, id);
+  }, { timeout: 15_000 }).toBe(true);
+  await expect(row).toBeVisible();
 }
 
 test('imports TCB.PAY as editable vectors, text, components and variables', async ({ page }, testInfo) => {
@@ -84,7 +87,8 @@ test('imports TCB.PAY as editable vectors, text, components and variables', asyn
 
   for (const id of ['fig-0-4', 'fig-0-52', 'fig-0-53']) {
     await revealLayer(page, id);
-    await page.locator(`[data-layer-id="${id}"] .layer-disclosure`).click();
+    const disclosure = page.locator(`[data-layer-id="${id}"] .layer-disclosure`);
+    if (await disclosure.getAttribute('aria-expanded') === 'false') await disclosure.click();
   }
   await revealLayer(page, 'fig-0-804');
   await page.locator('[data-layer-id="fig-0-804"]').click();

@@ -18,11 +18,13 @@
 - Секция экспорта выделения в Inspector с PNG/SVG, масштабом 1–3×, предпросмотром и именем файла по имени слоя.
 - Расширенное объектное меню: paste to replace, SVG/CSS copy, Prototype links, перенос между страницами, порядок, группы/фреймы, rename, flatten/outline для фигур, Auto Layout, components, visibility/lock и flip.
 - Регрессионные fixtures `Transit.Lines.fig` и `BestProjects.Tracker.fig` для Figma lines, page backgrounds, stroke paints и gradient paints.
+- Полный базовый набор primitives: Line, Arrow, Polygon/Triangle и Star рядом с Rectangle/Ellipse. У Line/Arrow есть две редактируемые endpoints и точные поля длины/координат, у Arrow — независимые наконечники, у Polygon — стороны, у Star — лучи и inner radius. `L` / `Shift+L` выбирают линию/стрелку, `Shift` ограничивает угол или пропорции; WebGL/SVG, persistence, Undo и SVG/PNG export используют исходные параметры фигур.
 
 ### Изменено
 
 - Верхняя и нижняя панели рабочего пространства убраны. Слева находятся проект, импорт, сохранение, переключатель UI и zoom; справа — Undo/Redo, Presentation и тема. Глобальный Export заменен экспортом выделения в Inspector. В footer остаются только число объектов и подписанный масштаб.
 - `Cmd/Ctrl+\\` теперь скрывает также tool rail и canvas-подсказку: без панелей остаётся только canvas. Общие viewport helpers сохраняют корректный fit/zoom при новой ширине рабочей области.
+- Фигуры и изображение объединены в выпадающий список в существующем tool rail; выбранный пункт сохраняется как главная иконка. Иконки Layers используют горизонтальные Line/Arrow и контурные shape glyphs в стиле Figma.
 
 ### Исправлено
 
@@ -43,6 +45,11 @@
 - Текст на canvas больше не размывается при увеличении: убран предел 8×, а длинные строки делятся на retained-фрагменты с учётом GPU texture limit. На 6400% видимые фрагменты получают разрешение по zoom/DPR вместо растягивания старого растра.
 - Подпись корневого фрейма двигается вместе с artwork и selection во время deferred drag, а не догоняет объект после отпускания.
 - Внутренние отверстия `nonzero`-векторов корректно вырезаются в WebGL независимо от порядка контуров; буква «б» в логотипе ТКБ больше не заливается. Исправление применяется к уже сохранённым редактируемым path без повторного импорта.
+- Резервный JSON проекта снова содержит все страницы и узлы полного `state.doc`, а не только активную страницу.
+- Group → Undo больше не разрушает retained дочерние Pixi-views и не оставляет неработающий WebGL canvas.
+- Project/help/zoom popovers получают `Escape` до снятия selection; числовой draft отменяется по `Escape` без commit на blur, а длинные подписи не скрывают значения.
+- Line/Arrow больше не вращаются вокруг центра bounding box: start остаётся на месте при изменении угла и endpoint drag, а `Escape` во время протяжки не оставляет объект.
+- Ручное expand/collapse в Layers больше не запускает повторный scroll к старому selection и не размонтирует целевую строку перед кликом; disclosure получил доступное `aria-expanded` состояние.
 
 ### Производительность
 
@@ -65,7 +72,7 @@
 
 ### Проверка
 
-- 100 unit-тестов и 60 browser-сценариев; production TypeScript/Vite build.
+- 107 unit-тестов и 67 browser-сценариев; production TypeScript/Vite build. Добавлены полный multi-page backup, Group → Undo, Escape/NumberField, Figma primitives/endpoints/JSON roundtrip, shape menu и Layers scroll regressions.
 - Полные `UI Prep Buttons (Community).fig` и `Globbb - Design System.fig` проверены в WebGL/SVG и после reload; community fixtures дополнительно проверяют embedded images, font fallback и известные RGBA-пиксели отражённых иллюстраций.
 - Реальный SMZ проверен на DPR 2: резкий текст на 6400%, live frame labels и canvas-only 2480×1280 без обрезания новой области.
 

@@ -37,6 +37,191 @@ test('creates, transforms and undoes a shape', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test('creates an editable line with a visible stroke and persists it', async ({ page }) => {
+  await page.goto('/?hitLayer=1');
+  await expect(page.locator('[data-renderer="webgl"]')).toBeVisible();
+  await page.keyboard.press('l');
+  await expect(page.getByRole('button', { name: 'Линия', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const beforeRender = await page.locator('.pixi-scene').screenshot({ animations: 'disabled' });
+  const canvas = await page.locator('.editor-svg').boundingBox();
+  if (!canvas) throw new Error('Canvas not found');
+  await page.mouse.move(canvas.x + 300, canvas.y + 300);
+  await page.mouse.down();
+  await page.mouse.move(canvas.x + 520, canvas.y + 360, { steps: 5 });
+  await page.mouse.up();
+  await expect(page.locator('.layer-name', { hasText: 'Линия' })).toBeVisible();
+  await expect(page.locator('.scene-node--line')).toHaveCount(1);
+  const afterRender = await page.locator('.pixi-scene').screenshot({ animations: 'disabled' });
+  expect(beforeRender.equals(afterRender)).toBe(false);
+  await expect.poll(() => page.evaluate(() => {
+    const doc = JSON.parse(localStorage.getItem('malewich:document:v1')!);
+    const line = doc.nodes.find((node: { type: string }) => node.type === 'line');
+    return line && {
+      hasLengthAndAngle: line.width > 0 && Math.abs(line.rotation) > 0,
+      height: line.height,
+    };
+  })).toEqual({ hasLengthAndAngle: true, height: 0 });
+
+  // WebGL uses a transparent hit layer; reload in SVG mode to verify the reference stroke.
+  await page.goto('/?renderer=svg&hitLayer=1');
+  await expect(page.locator('.scene-node--line path')).toHaveAttribute('stroke', '#202020');
+  await page.locator('.layer-name', { hasText: 'Линия' }).click();
+  const strokeInput = page.getByRole('textbox', { name: 'Обводка: HEX' });
+  await strokeInput.fill('#ff0000');
+  await strokeInput.press('Enter');
+  await expect(page.locator('.scene-node--line path')).toHaveAttribute('stroke', '#ff0000');
+});
+
+test('edits line endpoints and cancels a draft with Escape', async ({ page }) => {
+  await page.goto('/?renderer=svg&hitLayer=1');
+  await page.keyboard.press('l');
+  const canvas = await page.locator('.editor-svg').boundingBox();
+  if (!canvas) throw new Error('Canvas not found');
+  await page.mouse.move(canvas.x + 300, canvas.y + 300);
+  await page.mouse.down();
+  await page.mouse.move(canvas.x + 500, canvas.y + 300, { steps: 4 });
+  await page.mouse.up();
+  await expect(page.locator('.line-endpoint')).toHaveCount(2);
+  await expect(page.locator('.selection-overlay .resize-handle')).toHaveCount(0);
+  await expect(page.locator('.selection-overlay .rotation-handle')).toHaveCount(0);
+  const length = page.getByRole('textbox', { name: 'Длина', exact: true });
+  await length.fill('200');
+  await length.press('Enter');
+  const strokeWidth = page.getByRole('textbox', { name: 'Толщина', exact: true });
+  await strokeWidth.fill('10');
+  await strokeWidth.press('Enter');
+  await expect(page.locator('.scene-node--line path')).toHaveAttribute('stroke-width', '10');
+  const x1 = page.getByRole('textbox', { name: 'X1', exact: true });
+  const initialLength = await length.inputValue();
+  const initialX1 = await x1.inputValue();
+  const endpoint = await page.locator('.line-endpoint[data-endpoint="end"]').boundingBox();
+  if (!endpoint) throw new Error('Line endpoint not found');
+  await page.mouse.move(endpoint.x + endpoint.width / 2, endpoint.y + endpoint.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(endpoint.x + endpoint.width / 2 + 80, endpoint.y + endpoint.height / 2 + 60, { steps: 5 });
+  await page.mouse.up();
+  await expect(length).not.toHaveValue(initialLength);
+  await expect(x1).toHaveValue(initialX1);
+  await page.getByTitle('Отменить (⌘Z)').click();
+  await expect(length).toHaveValue(initialLength);
+
+  await page.keyboard.press('l');
+  await page.mouse.move(canvas.x + 320, canvas.y + 380);
+  await page.mouse.down();
+  await page.mouse.move(canvas.x + 500, canvas.y + 430, { steps: 3 });
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(page.locator('.scene-node--line')).toHaveCount(1);
+  await expect(page.locator('.layer-name', { hasText: 'Линия' })).toHaveCount(1);
+});
+
+test('creates and edits arrow, polygon and star from the shape menu', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/?hitLayer=1');
+  await expect(page.locator('[data-renderer="webgl"]')).toBeVisible();
+  const canvas = await page.locator('.editor-svg').boundingBox();
+  if (!canvas) throw new Error('Canvas not found');
+  const draw = async (x1: number, y1: number, x2: number, y2: number) => {
+    await page.mouse.move(canvas.x + x1, canvas.y + y1);
+    await page.mouse.down();
+    await page.mouse.move(canvas.x + x2, canvas.y + y2, { steps: 5 });
+    await page.mouse.up();
+  };
+  const renderScreenshot = async () => {
+    await page.locator('.editor-svg').evaluate((svg) => { svg.style.visibility = 'hidden'; });
+    await page.locator('.canvas-grid').evaluate((grid) => { grid.style.visibility = 'hidden'; });
+    const screenshot = await page.locator('.pixi-scene').screenshot({ animations: 'disabled' });
+    await page.locator('.editor-svg').evaluate((svg) => { svg.style.visibility = ''; });
+    await page.locator('.canvas-grid').evaluate((grid) => { grid.style.visibility = ''; });
+    return screenshot;
+  };
+
+  await page.getByRole('button', { name: 'Выбрать фигуру' }).click();
+  await page.getByRole('menuitemradio', { name: /Изображение/ }).click();
+  await expect(page.getByRole('button', { name: 'Изображение', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+  let previousRender = await renderScreenshot();
+  await page.keyboard.press('Shift+L');
+  await expect(page.getByRole('button', { name: 'Стрелка', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await draw(300, 300, 470, 340);
+  await page.getByRole('checkbox', { name: 'Наконечник в начале' }).check();
+  let nextRender = await renderScreenshot();
+  expect(previousRender.equals(nextRender)).toBe(false);
+  previousRender = nextRender;
+
+  await page.getByRole('button', { name: 'Выбрать фигуру' }).click();
+  await page.getByRole('menuitemradio', { name: 'Многоугольник' }).click();
+  await expect(page.getByRole('button', { name: 'Многоугольник', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await draw(520, 300, 650, 430);
+  const sides = page.getByRole('textbox', { name: 'Стороны', exact: true });
+  await sides.fill('5');
+  await sides.press('Enter');
+  nextRender = await renderScreenshot();
+  expect(previousRender.equals(nextRender)).toBe(false);
+  previousRender = nextRender;
+
+  await page.getByRole('button', { name: 'Выбрать фигуру' }).click();
+  await page.getByRole('menuitemradio', { name: 'Звезда' }).click();
+  await expect(page.getByRole('button', { name: 'Звезда', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await draw(700, 300, 850, 450);
+  await expect(page.getByRole('button', { name: 'Звезда', exact: true })).toBeVisible();
+  const points = page.getByRole('textbox', { name: 'Лучи', exact: true });
+  await points.fill('6');
+  await points.press('Enter');
+  const innerRadius = page.getByRole('textbox', { name: /Внутренний радиус/ });
+  await innerRadius.fill('50');
+  await innerRadius.press('Enter');
+  nextRender = await renderScreenshot();
+  expect(previousRender.equals(nextRender)).toBe(false);
+
+  await expect.poll(() => page.evaluate(() => {
+    const doc = JSON.parse(localStorage.getItem('malewich:document:v1')!);
+    return ['arrow', 'polygon', 'star'].every((type) => doc.nodes.some((node: { type: string }) => node.type === type));
+  })).toBe(true);
+  await page.goto('/?renderer=svg&hitLayer=1');
+  await expect(page.locator('.scene-node--arrow path')).toBeVisible();
+  await expect(page.locator('.scene-node--polygon path')).toBeVisible();
+  await expect(page.locator('.scene-node--star path')).toBeVisible();
+  expect(await page.locator('.scene-node--arrow path').evaluate((path) =>
+    (path.getAttribute('d')?.match(/M/g) ?? []).length)).toBe(5);
+  expect(await page.locator('.scene-node--polygon path').evaluate((path) =>
+    (path.getAttribute('d')?.match(/L/g) ?? []).length)).toBe(4);
+  expect(await page.locator('.scene-node--star path').evaluate((path) =>
+    (path.getAttribute('d')?.match(/L/g) ?? []).length)).toBe(11);
+  expect(errors).toEqual([]);
+});
+
+test('keeps retained views alive after group undo', async ({ page }) => {
+  const now = new Date().toISOString();
+  const base = (id: string, name: string, x: number) => ({
+    id, type: 'rectangle', name, x, y: 0, width: 120, height: 80, rotation: 0,
+    opacity: 1, visible: true, locked: false, parentId: null, pageId: 'page-1',
+    fill: '#7357ff', stroke: 'transparent', strokeWidth: 0, cornerRadius: 8,
+  });
+  const doc = {
+    version: 1, id: 'group-undo', name: 'Group undo', createdAt: now, updatedAt: now,
+    nodes: [base('first', 'First', 0), base('second', 'Second', 180)],
+    pages: [{ id: 'page-1', name: 'Страница 1' }], activePageId: 'page-1',
+  };
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.addInitScript((document) => {
+    localStorage.setItem('malewich:document:v1', JSON.stringify(document));
+  }, doc);
+  await page.goto('/?hitLayer=1');
+  await expect(page.locator('[data-renderer="webgl"]')).toBeVisible();
+  await page.locator('[data-layer-id="first"]').click();
+  await page.locator('[data-layer-id="second"]').click({ modifiers: ['Shift'] });
+  await page.keyboard.press('Meta+g');
+  await expect(page.locator('[data-node-kind="Группа"]')).toHaveCount(1);
+  await page.keyboard.press('Meta+z');
+  await expect(page.locator('[data-layer-id="first"]')).toBeVisible();
+  await expect(page.locator('[data-layer-id="second"]')).toBeVisible();
+  await expect(page.locator('[data-renderer="webgl"]')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test('keeps nested absolute geometry aligned after moving a frame', async ({ page }, testInfo) => {
   const now = new Date().toISOString();
   const base = (id: string, name: string, x: number, y: number, width: number, height: number, parentId: string | null) => ({

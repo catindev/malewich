@@ -1,6 +1,7 @@
 import { GraphicsPath, Polygon } from 'pixi.js';
 import { parseSVGPath } from '@open-pencil/scene-graph/parse-path';
 import type { EditorNode, VectorNode } from '../types';
+import { parametricShapePath } from './shapes';
 
 export const MIN_ZOOM = 0.05;
 export const MAX_ZOOM = 256;
@@ -101,6 +102,7 @@ export function dashVectorPath(data: string, pattern: number[]): string {
 /** Pixel-space outline used only when a shape stroke needs native-style dashes in Pixi. */
 export function shapeOutlinePath(node: EditorNode): string {
   const { x, y, width: w, height: h } = node;
+  if (node.type === 'polygon' || node.type === 'star') return parametricShapePath(node);
   if (node.type === 'ellipse') {
     const rx = w / 2;
     const ry = h / 2;

@@ -52,8 +52,11 @@ export function matrixToString(matrix: Matrix): string {
 }
 
 export function nodeMatrix(node: EditorNode): Matrix {
-  const centerX = node.x + node.width / 2;
-  const centerY = node.y + node.height / 2;
+  // Line/Arrow store their first endpoint in x/y. Rotating around the bounding
+  // box center moves that endpoint and breaks the segment editing contract.
+  const linear = node.type === 'line' || node.type === 'arrow';
+  const centerX = linear ? node.x : node.x + node.width / 2;
+  const centerY = linear ? node.y : node.y + node.height / 2;
   const rotation = rotationMatrix(node.rotation, centerX, centerY);
   if (!node.flipX && !node.flipY) return rotation;
   return multiplyMatrix(rotation, {
